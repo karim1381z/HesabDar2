@@ -308,6 +308,88 @@ object JalaliCalendarUtils {
         return Triple(jy, jm.coerceIn(1, 12), jd.coerceIn(1, 31))
     }
 
+    /**
+     * Exact mathematical inverse of [gregorianToJalali]: converts a Jalali (jy, jm, jd)
+     * date into its Gregorian (gy, gm, gd) triple.
+     */
+    fun jalaliToGregorian(jy: Int, jm: Int, jd: Int): Triple<Int, Int, Int> {
+        val jy1 = jy + 1595
+        var days = -355668 +
+            (365 * jy1) +
+            ((jy1 / 33) * 8) +
+            (((jy1 % 33) + 3) / 4) +
+            jd +
+            if (jm < 7) (jm - 1) * 31 else ((jm - 7) * 30) + 186
+        var gy = 400 * (days / 146097)
+        days %= 146097
+        if (days > 36524) {
+            gy += 100 * (--days / 36524)
+            days %= 36524
+            if (days >= 365) days++
+        }
+        gy += 4 * (days / 1461)
+        days %= 1461
+        if (days > 365) {
+            gy += (days - 1) / 365
+            days = (days - 1) % 365
+        }
+        var gd = days + 1
+        val isLeap = (gy % 4 == 0 && gy % 100 != 0) || (gy % 400 == 0)
+        val gregorianMonthDays = intArrayOf(0, 31, if (isLeap) 29 else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+        var gm = 1
+        while (gm <= 12 && gd > gregorianMonthDays[gm]) {
+            gd -= gregorianMonthDays[gm]
+            gm++
+        }
+        return Triple(gy, gm.coerceIn(1, 12), gd.coerceIn(1, 31))
+    }
+
+    /**
+     * Returns `[startInclusiveMillis, endExclusiveMillis)` in `Asia/Tehran` timezone
+     * for the given Jalali year and month (1..12).
+     */
+    fun jalaliMonthEpochRangeMillis(jy: Int, jm: Int): Pair<Long, Long> {
+        val safeMonth = jm.coerceIn(1, 12)
+        val (startGy, startGm, startGd) = jalaliToGregorian(jy, safeMonth, 1)
+        val nextYear = if (safeMonth == 12) jy + 1 else jy
+        val nextMonth = if (safeMonth == 12) 1 else safeMonth + 1
+        val (endGy, endGm, endGd) = jalaliToGregorian(nextYear, nextMonth, 1)
+
+        val startCal = Calendar.getInstance(tehranTimeZone, Locale.US).apply {
+            set(Calendar.YEAR, startGy)
+            set(Calendar.MONTH, startGm - 1)
+            set(Calendar.DAY_OF_MONTH, startGd)
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val endCal = Calendar.getInstance(tehranTimeZone, Locale.US).apply {
+            set(Calendar.YEAR, endGy)
+            set(Calendar.MONTH, endGm - 1)
+            set(Calendar.DAY_OF_MONTH, endGd)
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        return startCal.timeInMillis to endCal.timeInMillis
+    }
+
+    fun shiftJalaliYearMonth(yearMonthKey: Int, deltaMonths: Int): Int {
+        var year = yearMonthKey / 100
+        var month = (yearMonthKey % 100) + deltaMonths
+        while (month < 1) {
+            month += 12
+            year -= 1
+        }
+        while (month > 12) {
+            month -= 12
+            year += 1
+        }
+        return year * 100 + month
+    }
+
     fun calculateRemainingDaysToPayday(paydayStartDay: Int, nowMillis: Long = System.currentTimeMillis()): Int {
         val jalali = fromTimestamp(nowMillis)
         val monthLength = daysInJalaliMonth(jalali.year, jalali.month)
@@ -376,7 +458,7 @@ object JibemanSmsEngine : BankSmsParser {
         BankProfile("سرمایه", "Sarmayeh", "ic_bank_sarmayeh", listOf("+98300058", "98300058", "7007058", "987007058", "+987007058")),
         BankProfile("سینا", "Sina", "ic_bank_sina", listOf("Sina Bank", "+9850003700798704", "9850003700798704", "50003700798704", "09850004756", "+9850004756", "9850004756", "50004756", "50004751", "+98300028", "500048", "500019", "98500048", "sina bank", "SinaBank", "sinabank")),
         BankProfile("صادرات ایران", "Saderat", "ic_bank_saderat", listOf("+987007851040", "+9830009419", "9830009419", "30009419", "983-000-9419", "+98200060", "+98200040", "+9820004008", "+98700719", "BankSaderat", "700710", "700718", "98700719", "700719", "7007190")),
-        BankProfile("سپه", "Sepah", "ic_bank_sepah", listOf("100072419", "SEPAH", "Sepah", "SEPAHBANK", "SEPAH BANK", "SepahBank", "Sepah Bank", "986715001", "+986715001", "6715001", "986715000", "6715000", "+986715000", "+986715000015", "986715000015", "+989122200207", "200015", "6715000015", "+986830068400107", "98715000015", "6715000016")),
+        BankProfile("سپه", "Sepah", "ic_bank_sepah", listOf("100072419", "98100072419", "+98100072419", "SEPAH", "Sepah", "SEPAHBANK", "SEPAH BANK", "SepahBank", "Sepah Bank", "BankSepah", "Bank Sepah", "banksepah", "BANKSEPAH", "986715001", "+986715001", "6715001", "986715000", "6715000", "+986715000", "+986715000015", "986715000015", "+989122200207", "200015", "98200015", "+98200015", "2000150", "982000150", "+982000150", "6715000015", "+986830068400107", "98715000015", "6715000016", "6715000017", "6715000018", "30002015", "9830002015", "+9830002015", "500015", "98500015", "+98500015")),
         BankProfile("صنعت و معدن", "Industry & Mine", "ic_bank_sanat_madan", listOf("+9820004003", "+98100099", "100099")),
         BankProfile("قرض \u200Cالحسنه رسالت", "Resalat QH", "ic_bank_resalat", listOf("2000474701", "+982000474701", "982000474701", "Resalat", "resalat", "RESALAT", "ResalatBank", "Resalat Bank", "resalatbank", "50001474701", "9850001474701", "+9850001474701", "9850004747", "+9850004747", "989999904747", "9999904747", "50004747", "500014747", "+9820004747", "20004746", "20004747", "+98500014747", "9820004747")),
         BankProfile("قرض \u200Cالحسنه مهر ایران", "Mehr Iran", "ic_bank_mehr_iran", listOf("B.QMEHRIRAN")),
@@ -461,6 +543,26 @@ object JibemanSmsEngine : BankSmsParser {
     }
 
     private val customSenderToProfile = java.util.concurrent.ConcurrentHashMap<String, BankProfile>()
+
+    fun unregisterCustomSender(senderAddress: String) {
+        val cleanSender = senderAddress.trim()
+        if (cleanSender.isEmpty()) return
+        customSenderToProfile.remove(cleanSender)
+        customSenderToProfile.remove(cleanSender.lowercase(Locale.ROOT))
+        val norm = normalizeSender(cleanSender)
+        if (norm.isNotEmpty()) {
+            customSenderToProfile.remove(norm)
+        }
+    }
+
+    fun isKnownBankName(bankNameFa: String): Boolean {
+        val clean = bankNameFa.trim().replace("\u200C", " ")
+        if (clean.isEmpty()) return false
+        return BANK_PROFILES.any {
+            it.nameFa == bankNameFa.trim() ||
+                it.nameFa.replace("\u200C", " ") == clean
+        }
+    }
 
     fun registerCustomSenderForBank(senderAddress: String, bankNameFa: String) {
         val cleanSender = senderAddress.trim()
@@ -558,9 +660,15 @@ object JibemanSmsEngine : BankSmsParser {
     private val contextWithdraw = listOf("کارت اعتباری")
     private val notificationMarkers = listOf("شناسه تایید", "متشکریم", "سپاسگزاریم")
     private val amountLabels = listOf("مبلغ")
-    private val balanceLabels = listOf("موجودی حساب", "مانده حساب", "موجودی", "مانده")
+    private val balanceLabels = listOf(
+        "موجودی قابل برداشت", "مانده قابل برداشت",
+        "موجودی حساب", "مانده حساب",
+        "موجودی فعلی", "مانده فعلی",
+        "موجودی جدید", "مانده جدید",
+        "موجودی", "مانده"
+    )
 
-    private const val AFTER_LABEL = "[^\\d]{0,12}?([\\d][\\d,]*)"
+    private const val AFTER_LABEL = "[^\\d]{0,18}?([\\d][\\d,]*)"
     private val amountLabelRegexes = amountLabels.map {
         Regex(Pattern.quote(it) + AFTER_LABEL)
     }
@@ -645,6 +753,16 @@ object JibemanSmsEngine : BankSmsParser {
         '+' -> "+"
         '-', '−' -> ch.toString()
         else -> ""
+    }
+
+    /**
+     * Extracts account balance (in Rials) from any non-OTP bank SMS, including
+     * balance-only inquiry or notification messages where [parse] might return null.
+     */
+    fun extractBalanceRial(rawMessage: String): Long? {
+        val text = normalizeMessage(rawMessage)
+        if (otpRegex.containsMatchIn(text)) return null
+        return numberAfterLabel(text, balanceLabelRegexes)
     }
 
     override fun parse(rawMessage: String): ParsedSms? {
@@ -1082,7 +1200,10 @@ object PersianVoiceSlangParserEngine {
         "رفتم بیرون",
         "بیرون رفتم",
         "اشتباه شد",
-        "به مبلغ"
+        "به مبلغ",
+        "به جاش",
+        "به جایش",
+        "به جای آن"
     )
 
     // Note: "برای", "بابت", "بابتِ", "واسه" are intentionally NOT in singleWordConversationalFillers
@@ -1148,7 +1269,10 @@ object PersianVoiceSlangParserEngine {
         "میلیونی",
         "میلیون",
         "میلیاردی",
-        "میلیارد"
+        "میلیارد",
+        "مبلغ",
+        "بجاش",
+        "بجایش"
     )
 
     private val narrativeIntroTriggerWords = listOf(
@@ -1198,7 +1322,14 @@ object PersianVoiceSlangParserEngine {
 
     private val attributeDescriptorKeywords = listOf(
         "سایز", "شماره", "مدل", "طبقه", "واحد", "پلاک", "خط", "کد",
-        "جلد", "صفحه", "فصل", "ترم", "کلاس", "پایه", "برگ", "ساعت"
+        "جلد", "صفحه", "فصل", "ترم", "کلاس", "پایه", "برگ", "ساعت",
+        "سایت", "وبسایت", "وب‌سایت", "فروشگاه", "برنامه", "اپ", "اپلیکیشن",
+        "کانال", "پیج", "شعبه", "ایستگاه", "سری", "نسخه",
+        "آیفون", "سامسونگ", "پژو", "پراید", "سمند", "دنا", "تارا", "تیبا", "کوییک"
+    )
+
+    private val dativeCompoundActionNouns = listOf(
+        "کمک", "هدیه", "کادو", "قرض", "صدقه", "عیدی", "انعام", "خیریه", "نذری"
     )
 
     private val smallQuantityWords = mapOf(
@@ -1417,7 +1548,7 @@ object PersianVoiceSlangParserEngine {
         // Protected as long as the number is NOT immediately followed by a currency/multiplier word (so "واحد ۵۰۰ تومن" still parses ۵۰۰ تومن).
         val descriptorPattern = attributeDescriptorKeywords.sortedByDescending { it.length }.joinToString("|")
         val descriptorRegex = Regex(
-            """(?<=^|\s)($descriptorPattern)\s+([۰-۹0-9]{1,5}|$qtyWordsPattern)(?!\s*(?:$currencyWordsPattern)(?=\s|$|،))(?=\s|$|،)"""
+            """(?<=^|\s)($descriptorPattern)\s+([۰-۹0-9]{1,6}|$qtyWordsPattern)(?!\s*(?:$currencyWordsPattern)(?=\s|$|،))(?=\s|$|،)"""
         )
         text = descriptorRegex.replace(text) { match ->
             val descWord = match.groupValues[1].trim()
@@ -1782,11 +1913,14 @@ object PersianVoiceSlangParserEngine {
         val textWithoutQtyPlaceholders = protectedText.replace(Regex("""⟪QTY[A-Z]+⟫"""), " ")
         val engWithoutPlaceholders = PersianNumberUtils.toEnglishDigits(textWithoutQtyPlaceholders)
 
-        // 1. Check ALL numeric digit amounts in the clause and take the largest explicit currency amount
+        // 1. Check ALL numeric digit amounts in the clause.
+        //    Strongly prefer explicit currency/multiplier amounts (e.g. "۵۵ هزار تومان")
+        //    over bare numbers (e.g. brand/site numbers like "۵۰۴۰").
         val digitRegex = Regex(
             """([0-9]+(?:\.[0-9]+)?)\s*(میلیاردی|میلیارد|میلیونی|میلیون|ملیون|هزار\s*تومانش|هزار\s*تومنش|هزار\s*تومانی|هزار\s*تومنی|هزار\s*تومان|هزار\s*تومن|هزارش|هزاری|هزار|تومانش|تومنش|تومانی|تومنی|تومان|تومن|ریالش|ریالی|ریال)?"""
         )
-        var maxDigitAmount = 0L
+        var maxExplicitCurrencyDigitAmount = 0L
+        var maxBareDigitAmount = 0L
         for (digitMatch in digitRegex.findAll(engWithoutPlaceholders)) {
             val numVal = digitMatch.groupValues[1].toDoubleOrNull() ?: 0.0
             val unit = digitMatch.groupValues[2].trim()
@@ -1799,13 +1933,22 @@ object PersianVoiceSlangParserEngine {
                     numVal in 1.0..999.0 -> (numVal * 1_000.0).toLong()
                     else -> numVal.toLong()
                 }
-                if (candidate > maxDigitAmount) {
-                    maxDigitAmount = candidate
+                if (unit.isNotEmpty()) {
+                    if (candidate > maxExplicitCurrencyDigitAmount) {
+                        maxExplicitCurrencyDigitAmount = candidate
+                    }
+                } else {
+                    if (candidate > maxBareDigitAmount) {
+                        maxBareDigitAmount = candidate
+                    }
                 }
             }
         }
-        if (maxDigitAmount > 0L) {
-            return maxDigitAmount
+        if (maxExplicitCurrencyDigitAmount > 0L) {
+            return maxExplicitCurrencyDigitAmount
+        }
+        if (maxBareDigitAmount > 0L) {
+            return maxBareDigitAmount
         }
 
         // 2. Parse spoken Persian number words: e.g. "پانصد هزار تومان", "پنجاه تومن", "هفتاد تومن", "سی و نه تومن"
@@ -2067,11 +2210,11 @@ object PersianVoiceSlangParserEngine {
             }
 
             val precedingParsed = parseSingleVoiceClause(precedingSegment, null, "نقدی / دستی")
-            val hasExplicitVerb = Regex("""(?<=^|\s)(?:دادم|خریدم|گرفتم|زدم|کردم|بدم|بود)(?=\s|$)""")
+            val hasExplicitVerb = Regex("""(?<=^|\s)(?:دادم|ندادم|خریدم|نخریدم|گرفتم|نگرفتم|زدم|نزدم|کردم|نکردم|فروختم|بدم|بود|نشد|شد)(?=\s|$)""")
                 .containsMatchIn(precedingSegment)
 
             if (precedingParsed.totalAmountToman > 0L &&
-                (precedingParsed.purposeCategory.isNotBlank() || hasExplicitVerb)
+                (precedingParsed.purposeCategory.isNotBlank() || hasExplicitVerb || isNegatedOrCancelledClause(precedingSegment))
             ) {
                 result.add(precedingSegment)
                 currentStart = candidateSplitIdx
@@ -2695,11 +2838,20 @@ object PersianVoiceSlangParserEngine {
         exactPhraseAmounts.forEach { (phrase, _) ->
             corePhrase = corePhrase.replace(phrase, " ")
         }
-        // Strip numeric digits (outside ⟪QTY...⟫ placeholders) + optional commas + optional هزار/میلیون + optional تومان/تومن/تومانش/تومنش/تومانی/تومنی
-        corePhrase = corePhrase.replace(
-            Regex("""[۰-۹0-9][۰-۹0-9,٬،]*\s*(?:میلیاردی|میلیارد|میلیونی|میلیون|ملیون|هزارش|هزاری|هزار)?\s*(?:تومانش|تومنش|تومانی|تومنی|تومان|تومن|ریالش|ریالی|ریال)?"""),
-            " "
+        // Strip numeric digits (outside ⟪QTY...⟫ placeholders):
+        // If an explicit currency/multiplier number exists in the clause (e.g. "۵۵ هزار تومان"),
+        // ONLY strip currency-tagged numbers so bare brand/identifier numbers (e.g. "۵۰۴۰") stay intact!
+        val explicitCurrencyDigitRegex = Regex(
+            """[۰-۹0-9][۰-۹0-9,٬،]*\s*(?:(?:میلیاردی|میلیارد|میلیونی|میلیون|ملیون|هزارش|هزاری|هزار)\s*(?:تومانش|تومنش|تومانی|تومنی|تومان|تومن|ریالش|ریالی|ریال)?|(?:تومانش|تومنش|تومانی|تومنی|تومان|تومن|ریالش|ریالی|ریال))"""
         )
+        if (explicitCurrencyDigitRegex.containsMatchIn(corePhrase)) {
+            corePhrase = corePhrase.replace(explicitCurrencyDigitRegex, " ")
+        } else {
+            corePhrase = corePhrase.replace(
+                Regex("""[۰-۹0-9][۰-۹0-9,٬،]*\s*(?:میلیاردی|میلیارد|میلیونی|میلیون|ملیون|هزارش|هزاری|هزار)?\s*(?:تومانش|تومنش|تومانی|تومنی|تومان|تومن|ریالش|ریالی|ریال)?"""),
+                " "
+            )
+        }
         // Strip spoken number words followed by هزار/میلیون/تومن/تومان/تومانش/تومنش/تومانی/تومنی
         val numberWordsPattern = numberWordTokens.keys.sortedByDescending { it.length }.joinToString("|")
         corePhrase = corePhrase.replace(
@@ -2710,6 +2862,25 @@ object PersianVoiceSlangParserEngine {
             Regex("""(?<=^|\s)(?:(?:$numberWordsPattern)(?:\s+و\s+(?:$numberWordsPattern))*)\s+(?:میلیاردی|میلیارد|میلیونی|میلیون|ملیون|هزارش|هزاری|هزار)(?=\s|$)"""),
             " "
         )
+
+        // Normalize Persian dative compound light-verb phrases BEFORE preposition stripping:
+        // e.g. "به فقیر کمک کردم" -> "کمک به فقیر", "به علی هدیه دادم" -> "هدیه به علی"
+        val dativeNounsPattern = dativeCompoundActionNouns.joinToString("|")
+        val dativeCompoundRegex = Regex(
+            """(?<=^|\s)به\s+(.+?)\s+($dativeNounsPattern)(?:\s+(?:کردم|دادم|زدم|بدم|کنم|بکنم))?(?=\s|$)"""
+        )
+        corePhrase = dativeCompoundRegex.replace(corePhrase) { m ->
+            val recipient = m.groupValues[1].trim()
+            val actionNoun = m.groupValues[2].trim()
+            if (recipient.isNotBlank()) "$actionNoun به $recipient" else actionNoun
+        }
+
+        // Normalize Persian 1st-person sales phrases: e.g. "گوجه فروختم" -> "فروش گوجه"
+        val saleVerbRegex = Regex("""(?<=^|\s)(?:فروختم|فروختیم|فروش\s+رفت)(?=\s|$)""")
+        val hasSaleVerb = saleVerbRegex.containsMatchIn(corePhrase)
+        if (hasSaleVerb) {
+            corePhrase = corePhrase.replace(saleVerbRegex, " ")
+        }
 
         corePhrase = corePhrase
             .replace(Regex("""(?:با|از)\s+کارت\s+[^\s]+"""), " ")
@@ -2768,10 +2939,19 @@ object PersianVoiceSlangParserEngine {
             else -> rawCleanedPurpose
         }
         val purposeCategory = if (isIncomeClause) {
-            when (cleanedPurpose) {
+            val saleNormalized = if (hasSaleVerb) {
+                when {
+                    cleanedPurpose.isBlank() -> "فروش"
+                    cleanedPurpose.startsWith("فروش ") || cleanedPurpose == "فروش" -> cleanedPurpose
+                    else -> "فروش $cleanedPurpose"
+                }
+            } else {
+                cleanedPurpose
+            }
+            when (saleNormalized) {
                 "", "دریافت", "دریافتی" -> if (rawSpeech.contains("واریز")) "واریز وجه" else "دریافت وجه"
                 "واریز", "واریزی" -> "واریز وجه"
-                else -> cleanedPurpose
+                else -> saleNormalized
             }
         } else if (cleanedPurpose.isBlank() &&
             totalToman > 0L &&

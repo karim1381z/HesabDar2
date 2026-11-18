@@ -75,7 +75,11 @@ data class OrosiUiState(
     val showPaydayBackupModal: Boolean = false,
     val showAddCommitmentModal: Boolean = false,
     val showAddBankAccountModal: Boolean = false,
-    val isSyncingSms: Boolean = false,
+    val isSyncingSms: Boolean = true,
+    val loadingMonthKey: Int? = null,
+    val selectedAccountForEdit: BankAccountEntity? = null,
+    val selectedAccountCustomSenders: List<String> = emptyList(),
+    val isRescanningSingleBank: Boolean = false,
     val backupJsonText: String = "",
     val statusBannerMessage: String? = null
 )
@@ -100,9 +104,14 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
     private val _showPaydayBackupModal = MutableStateFlow(false)
     private val _showAddCommitmentModal = MutableStateFlow(false)
     private val _showAddBankAccountModal = MutableStateFlow(false)
-    private val _isSyncingSms = MutableStateFlow(false)
+    private val _isSyncingSms = MutableStateFlow(true)
+    private val _loadingMonthKey = MutableStateFlow<Int?>(null)
+    private val _selectedAccountForEdit = MutableStateFlow<BankAccountEntity?>(null)
+    private val _selectedAccountCustomSenders = MutableStateFlow<List<String>>(emptyList())
+    private val _isRescanningSingleBank = MutableStateFlow(false)
     private val _backupJsonText = MutableStateFlow("")
     private val _statusBannerMessage = MutableStateFlow<String?>(null)
+    private var monthSyncJob: kotlinx.coroutines.Job? = null
 
     init {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -206,6 +215,22 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             statusBannerMessage = triple.second,
             isSyncingSms = triple.third
         )
+    }.combine(
+        combine(
+            _loadingMonthKey,
+            _selectedAccountForEdit,
+            _selectedAccountCustomSenders,
+            _isRescanningSingleBank
+        ) { loadingMonth, editAcc, editSenders, rescanningBank ->
+            Tuple4(loadingMonth, editAcc, editSenders, rescanningBank)
+        }
+    ) { state, extra ->
+        state.copy(
+            loadingMonthKey = extra.first,
+            selectedAccountForEdit = extra.second,
+            selectedAccountCustomSenders = extra.third,
+            isRescanningSingleBank = extra.fourth
+        )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -225,21 +250,33 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
         val current = _selectedYearMonthKey.value
         if (deltaMonths > 0 && current >= currentYearMonthKey) return
         hasUserChangedMonthManually = true
-        var year = current / 100
-        var month = (current % 100) + deltaMonths
-        while (month < 1) {
-            month += 12
-            year -= 1
-        }
-        while (month > 12) {
-            month -= 12
-            year += 1
-        }
-        val candidateKey = year * 100 + month
-        _selectedYearMonthKey.value = if (deltaMonths > 0) {
+        val candidateKey = JalaliCalendarUtils.shiftJalaliYearMonth(current, deltaMonths)
+        val targetKey = if (deltaMonths > 0) {
             candidateKey.coerceAtMost(currentYearMonthKey)
         } else {
             candidateKey
+        }
+        _selectedYearMonthKey.value = targetKey
+
+        if (!repository.isJalaliMonthSynced(targetKey)) {
+            monthSyncJob?.cancel()
+            monthSyncJob = viewModelScope.launch {
+                _loadingMonthKey.value = targetKey
+                val startMs = System.currentTimeMillis()
+                try {
+                    repository.syncTransactionsForJalaliMonth(appContext, targetKey)
+                    val elapsed = System.currentTimeMillis() - startMs
+                    if (elapsed < 260L) {
+                        delay(260L - elapsed)
+                    }
+                } finally {
+                    if (_loadingMonthKey.value == targetKey) {
+                        _loadingMonthKey.value = null
+                    }
+                }
+            }
+        } else {
+            _loadingMonthKey.value = null
         }
     }
 
@@ -293,7 +330,7 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
         customSenderAddresses: List<String> = emptyList()
     ) {
         viewModelScope.launch {
-            repository.addOrUpdateBankAccount(
+            val finalBalance = repository.addOrUpdateBankAccount(
                 bankName = bankName,
                 balanceToman = balanceToman,
                 isTankhah = isTankhah,
@@ -301,7 +338,74 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
                 customSenderAddresses = customSenderAddresses
             )
             _showAddBankAccountModal.value = false
-            showBanner("منبع مالی «$bankName» با موجودی ${PersianNumberUtils.formatToman(balanceToman, true)} ذخیره شد.")
+            val msg = if (balanceToman <= 0L && finalBalance > 0L) {
+                "حساب «$bankName» اضافه شد و مانده ${PersianNumberUtils.formatToman(finalBalance, true)} از پیامک‌ها خوانده شد ✓"
+            } else {
+                "منبع مالی «$bankName» با موجودی ${PersianNumberUtils.formatToman(finalBalance, true)} ذخیره شد."
+            }
+            showBanner(msg)
+        }
+    }
+
+    fun openAccountEditSheet(account: BankAccountEntity) {
+        _selectedAccountCustomSenders.value = repository.getCustomSendersForBank(account.bankName)
+        _selectedAccountForEdit.value = account
+    }
+
+    fun dismissAccountEditSheet() {
+        _selectedAccountForEdit.value = null
+        _isRescanningSingleBank.value = false
+    }
+
+    fun saveBankAccountEdits(
+        originalBankName: String,
+        newBankName: String,
+        balanceToman: Long,
+        isTankhah: Boolean,
+        addedSenders: List<String>,
+        removedSenders: List<String>
+    ) {
+        viewModelScope.launch {
+            val cleanName = newBankName.trim().ifEmpty { originalBankName }
+            repository.updateBankAccountDetails(
+                originalBankName = originalBankName,
+                newBankName = cleanName,
+                balanceToman = balanceToman,
+                isTankhah = isTankhah,
+                addedSenders = addedSenders,
+                removedSenders = removedSenders
+            )
+            _selectedAccountForEdit.value = null
+            showBanner("تغییرات حساب «$cleanName» ذخیره شد ✓")
+        }
+    }
+
+    fun rescanSingleBank(bankName: String) {
+        viewModelScope.launch {
+            _isRescanningSingleBank.value = true
+            try {
+                val discovered = repository.rescanSingleBankFromSms(appContext, bankName)
+                val refreshed = dao.getBankAccountByName(bankName)
+                if (refreshed != null && _selectedAccountForEdit.value != null) {
+                    _selectedAccountForEdit.value = refreshed
+                    _selectedAccountCustomSenders.value = repository.getCustomSendersForBank(bankName)
+                }
+                if (discovered != null) {
+                    showBanner("مانده بانک «$bankName» از پیامک‌ها به‌روزرسانی شد: ${PersianNumberUtils.formatToman(discovered, true)} ✓")
+                } else {
+                    showBanner("پیامکی با مانده قابل استخراج برای «$bankName» پیدا نشد؛ می‌توانید سرشماره پیامکی را اضافه کنید.")
+                }
+            } finally {
+                _isRescanningSingleBank.value = false
+            }
+        }
+    }
+
+    fun deleteBankAccount(bankName: String) {
+        viewModelScope.launch {
+            repository.deleteBankAccount(bankName)
+            _selectedAccountForEdit.value = null
+            showBanner("حساب «$bankName» از فهرست حساب‌ها حذف شد.")
         }
     }
 
@@ -494,7 +598,15 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
         val currentList = _voiceState.value.parsedMultiItems.toMutableList()
         if (index !in currentList.indices) return
         val existingItem = currentList[index]
-        currentList[index] = existingItem.copy(isIncome = !existingItem.isIncome)
+        onSetMultiVoiceItemType(index, !existingItem.isIncome)
+    }
+
+    fun onSetMultiVoiceItemType(index: Int, isIncome: Boolean) {
+        val currentList = _voiceState.value.parsedMultiItems.toMutableList()
+        if (index !in currentList.indices) return
+        val existingItem = currentList[index]
+        if (existingItem.isIncome == isIncome) return
+        currentList[index] = existingItem.copy(isIncome = isIncome)
         val combinedNote = PersianVoiceSlangParserEngine.formatCombinedMultiVoiceNote(currentList)
         _voiceState.value = _voiceState.value.copy(
             parsedMultiItems = currentList,

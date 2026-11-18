@@ -58,6 +58,7 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -99,6 +100,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.data.local.AppSettingsEntity
+import com.example.data.local.BankAccountEntity
 import com.example.data.local.CommitmentEntity
 import com.example.data.local.TransactionEntity
 import com.example.domain.JalaliCalendarUtils
@@ -145,6 +147,7 @@ fun VoiceOverlayBottomSheet(
     onTransactionTypeChange: (Boolean) -> Unit = {},
     onUpdateMultiItem: (index: Int, newTitle: String, newAmountStr: String) -> Unit = { _, _, _ -> },
     onToggleMultiItemType: (index: Int) -> Unit = {},
+    onSetMultiItemType: (index: Int, isIncome: Boolean) -> Unit = { idx, _ -> onToggleMultiItemType(idx) },
     onSimulateVoiceRecord: () -> Unit,
     onConfirmVoiceEntry: () -> Unit,
     onDismiss: () -> Unit
@@ -152,7 +155,7 @@ fun VoiceOverlayBottomSheet(
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var isListening by remember { mutableStateOf(false) }
-    var voiceStatusHint by remember { mutableStateOf("برای شروع یا ضبط مجدد صدا روی موج ضربه بزنید") }
+    var voiceStatusHint by remember { mutableStateOf("برای شروع یا ضبط مجدد صحبت کنید") }
     var hasAutoLaunchedSystemDialogOnError by remember { mutableStateOf(false) }
 
     val currentOnSpeechChange by rememberUpdatedState(onSpeechChange)
@@ -388,11 +391,15 @@ fun VoiceOverlayBottomSheet(
                 Spacer(modifier = Modifier.height(10.dp))
             }
 
-            // 1. Glowing Turquoise Audio Wave (Tapping launches the system Google Voice Dialog)
-            Box(
+            val multiItems = voiceState.parsedMultiItems
+            val hasMultiItems = multiItems.size > 1
+            val isMultiNewMode = targetTx == null && hasMultiItems
+
+            // 1. Sleek Unified Voice Capture Header Card (wave + inline mic pill, zero redundant buttons)
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(24.dp))
+                    .clip(RoundedCornerShape(22.dp))
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
@@ -404,92 +411,93 @@ fun VoiceOverlayBottomSheet(
                     .border(
                         1.dp,
                         NishapurTurquoiseBright.copy(alpha = 0.50f),
-                        RoundedCornerShape(24.dp)
+                        RoundedCornerShape(22.dp)
                     )
                     .clickable {
                         launchSystemVoicePopup(fallbackToSimIfUnavailable = true)
                     }
-                    .padding(vertical = 16.dp, horizontal = 18.dp)
+                    .padding(vertical = 14.dp, horizontal = 16.dp)
                     .testTag("voice_record_button"),
-                contentAlignment = Alignment.Center
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Canvas(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                    ) {
-                        val barCount = 26
-                        val totalWidth = size.width
-                        val spacing = totalWidth / (barCount * 1.8f)
-                        val barWidth = spacing * 0.85f
-                        val centerY = size.height / 2f
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(40.dp)
+                ) {
+                    val barCount = 26
+                    val totalWidth = size.width
+                    val spacing = totalWidth / (barCount * 1.8f)
+                    val barWidth = spacing * 0.85f
+                    val centerY = size.height / 2f
 
-                        for (i in 0 until barCount) {
-                            val norm = i.toFloat() / barCount.toFloat()
-                            val envelope = sin(norm * Math.PI).toFloat()
-                            val dynamicWave = if (isListening || voiceState.isRecordingSimulated) {
-                                0.38f + 0.62f * kotlin.math.abs(sin(phase * 1.4f + i * 0.45f))
-                            } else {
-                                0.25f + 0.35f * kotlin.math.abs(sin(phase + i * 0.45f))
-                            }
-                            val barHeight = (size.height * 0.88f * envelope * dynamicWave).coerceAtLeast(10f)
-                            val x = (totalWidth - (barCount * (barWidth + spacing))) / 2f + i * (barWidth + spacing)
-
-                            drawRoundRect(
-                                color = if (i % 2 == 0) NishapurTurquoiseBright else NishapurTurquoiseSoft.copy(alpha = 0.78f),
-                                topLeft = Offset(x, centerY - barHeight / 2f),
-                                size = Size(barWidth, barHeight),
-                                cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f)
-                            )
+                    for (i in 0 until barCount) {
+                        val norm = i.toFloat() / barCount.toFloat()
+                        val envelope = sin(norm * Math.PI).toFloat()
+                        val dynamicWave = if (isListening || voiceState.isRecordingSimulated) {
+                            0.38f + 0.62f * kotlin.math.abs(sin(phase * 1.4f + i * 0.45f))
+                        } else {
+                            0.25f + 0.35f * kotlin.math.abs(sin(phase + i * 0.45f))
                         }
+                        val barHeight = (size.height * 0.88f * envelope * dynamicWave).coerceAtLeast(10f)
+                        val x = (totalWidth - (barCount * (barWidth + spacing))) / 2f + i * (barWidth + spacing)
+
+                        drawRoundRect(
+                            color = if (i % 2 == 0) NishapurTurquoiseBright else NishapurTurquoiseSoft.copy(alpha = 0.78f),
+                            topLeft = Offset(x, centerY - barHeight / 2f),
+                            size = Size(barWidth, barHeight),
+                            cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f)
+                        )
                     }
-                    Spacer(modifier = Modifier.height(6.dp))
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
                         text = if (isListening) "در حال شنیدن صدای شما..." else voiceStatusHint,
-                        style = MaterialTheme.typography.labelMedium,
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
                         color = NishapurTurquoiseSoft,
-                        textAlign = TextAlign.Center
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
                     )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(NishapurTurquoise)
+                            .border(1.dp, NishapurTurquoiseBright, RoundedCornerShape(50))
+                            .clickable { launchSystemVoicePopup(fallbackToSimIfUnavailable = true) }
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                            .testTag("system_voice_dialog_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Mic,
+                            contentDescription = "شروع مجدد ضبط صوتی",
+                            tint = AlabasterSilk,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = "ضبط مجدد",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
+                            color = AlabasterSilk,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
                 }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Prominent Button: "🎤 شروع مجدد ضبط صوتی" (Launches native system voice dialog whenever tapped)
-            Button(
-                onClick = { launchSystemVoicePopup(fallbackToSimIfUnavailable = true) },
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = PersianLapis,
-                    contentColor = AlabasterSilk
-                ),
-                contentPadding = PaddingValues(vertical = 12.dp, horizontal = 16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, NishapurTurquoiseBright, RoundedCornerShape(16.dp))
-                    .testTag("system_voice_dialog_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Mic,
-                    contentDescription = null,
-                    tint = NishapurTurquoiseBright,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "🎤 شروع مجدد ضبط صوتی",
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
-                    color = AlabasterSilk,
-                    maxLines = 1,
-                    softWrap = false
-                )
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // 1.5 Transaction Direction Selector (Expense vs. Income) when adding a new voice transaction
-            if (targetTx == null) {
+            // 1.5 Transaction Direction Selector (shown only for single-item new entry; multi-item cards have their own per-card toggle)
+            if (targetTx == null && !hasMultiItems) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -507,7 +515,7 @@ fun VoiceOverlayBottomSheet(
                         modifier = Modifier
                             .weight(1f)
                             .clip(RoundedCornerShape(10.dp))
-                            .background(if (isExpenseSelected) RubyRose.copy(alpha = 0.30f) else Color.Transparent)
+                            .background(if (isExpenseSelected) RubyRose.copy(alpha = 0.28f) else Color.Transparent)
                             .border(
                                 width = 1.dp,
                                 color = if (isExpenseSelected) RubyRoseSoft else Color.Transparent,
@@ -518,7 +526,7 @@ fun VoiceOverlayBottomSheet(
                             .testTag("voice_tx_type_expense")
                     ) {
                         Text(
-                            text = "پرداختی (خرج)",
+                            text = "پرداختی",
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = if (isExpenseSelected) FontWeight.ExtraBold else FontWeight.Medium
                             ),
@@ -542,7 +550,7 @@ fun VoiceOverlayBottomSheet(
                             .testTag("voice_tx_type_income")
                     ) {
                         Text(
-                            text = "دریافتی (واریز +)",
+                            text = "دریافتی",
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = if (isIncomeSelected) FontWeight.ExtraBold else FontWeight.Medium
                             ),
@@ -554,8 +562,7 @@ fun VoiceOverlayBottomSheet(
                 Spacer(modifier = Modifier.height(10.dp))
             }
 
-            // 2. Single Clean Sentence/Description Field at the top:
-            // "جمله یا توضیح تراکنش (مثلاً: ۷۰ تومن نانوایی)"
+            // 2. Single Clean Sentence/Description Field at the top
             OutlinedTextField(
                 value = voiceState.recognizedText,
                 onValueChange = onSpeechChange,
@@ -577,7 +584,7 @@ fun VoiceOverlayBottomSheet(
                         if (targetTx != null) {
                             "مثلاً: پفک، شارژ ایرانسل، نانوایی..."
                         } else {
-                            "مثلاً: ۷۰ تومن نانوایی، یا حقوق من ۵۰ هزار تومان بود و ۲۵ هزار تومانش رو خرج کردم..."
+                            "مثلاً: ۷۰ تومن نانوایی یا ۵۰ تومن بستنی و ۳۵ تومن طلب..."
                         }
                     )
                 },
@@ -585,74 +592,14 @@ fun VoiceOverlayBottomSheet(
                     .fillMaxWidth()
                     .testTag("voice_live_text_input"),
                 singleLine = false,
-                maxLines = 2,
+                maxLines = 3,
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = NishapurTurquoiseBright,
                     unfocusedBorderColor = OrosiHairline
                 )
             )
 
-            // 2.5 Structured Voice Speaking Pattern Guide (Option 1 + 3)
-            if (targetTx == null) {
-                Spacer(modifier = Modifier.height(10.dp))
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(OrosiSurfaceContainer)
-                        .border(1.dp, OrosiHairline, RoundedCornerShape(14.dp))
-                        .padding(horizontal = 12.dp, vertical = 9.dp)
-                        .testTag("voice_speaking_guide_card"),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = "💡 الگوهای گفتاری پیشنهادی (با ضربه روی هر الگو امتحان کنید):",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
-                        color = SaffronGoldLight
-                    )
-                    val patternExamples = listOf(
-                        "ثبت تکی:" to "۷۰ تومن نانوایی",
-                        "چند خرید هم‌زمان:" to "۵۰ تومن بستنی و ۳۰ تومن شارژ",
-                        "دخل و خرج ترکیبی:" to "حقوق من ۵۰ هزار تومان بود و ۲۵ هزار تومانش رو خرج کردم"
-                    )
-                    patternExamples.forEachIndexed { patternIdx, (patternTitle, sampleSpeech) ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(OrosiSurfaceLow)
-                                .border(1.dp, PersianLapisLight.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
-                                .clickable { onSpeechChange(sampleSpeech) }
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
-                                .testTag("voice_guide_sample_$patternIdx"),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = patternTitle,
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = NishapurTurquoiseSoft
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "«$sampleSpeech»",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                                color = AlabasterSilk,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
-                                textAlign = TextAlign.End
-                            )
-                        }
-                    }
-                }
-            }
-
             Spacer(modifier = Modifier.height(10.dp))
-
-            val multiItems = voiceState.parsedMultiItems
-            val hasMultiItems = multiItems.size > 1
-            val isMultiNewMode = targetTx == null && hasMultiItems
 
             // Live Auto-Extracted Summary Card: Editable Multi-Item List OR Single Item Editable Fields
             Column(
@@ -728,29 +675,67 @@ fun VoiceOverlayBottomSheet(
                                         )
                                     }
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    // Per-item Income / Expense pill badge (tappable when creating new transactions)
-                                    Box(
+                                    // Clear 2-way segmented toggle in every multi-item card header: "پرداختی" | "دریافتی" (zero minus signs)
+                                    Row(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(50))
-                                            .background(
-                                                if (item.isIncome) NishapurTurquoiseDeep else RubyRose.copy(alpha = 0.25f)
-                                            )
-                                            .border(
-                                                1.dp,
-                                                if (item.isIncome) NishapurTurquoiseBright else RubyRoseSoft,
-                                                RoundedCornerShape(50)
-                                            )
-                                            .clickable(enabled = targetTx == null) {
-                                                onToggleMultiItemType(idx)
-                                            }
-                                            .padding(horizontal = 9.dp, vertical = 3.dp)
-                                            .testTag("multi_voice_item_type_$idx")
+                                            .background(OrosiSurfaceContainer)
+                                            .border(1.dp, OrosiHairline, RoundedCornerShape(50))
+                                            .padding(2.dp)
+                                            .testTag("multi_voice_item_type_$idx"),
+                                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text(
-                                            text = if (item.isIncome) "دریافتی (واریز +)" else "پرداختی (خرج −)",
-                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
-                                            color = if (item.isIncome) NishapurTurquoiseSoft else RubyRoseSoft
-                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(50))
+                                                .background(if (!item.isIncome) RubyRose.copy(alpha = 0.30f) else Color.Transparent)
+                                                .border(
+                                                    1.dp,
+                                                    if (!item.isIncome) RubyRoseSoft else Color.Transparent,
+                                                    RoundedCornerShape(50)
+                                                )
+                                                .clickable(enabled = targetTx == null) {
+                                                    onSetMultiItemType(idx, false)
+                                                }
+                                                .padding(horizontal = 9.dp, vertical = 3.dp)
+                                                .testTag("multi_voice_item_expense_$idx")
+                                        ) {
+                                            Text(
+                                                text = "پرداختی",
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    fontWeight = if (!item.isIncome) FontWeight.ExtraBold else FontWeight.Medium
+                                                ),
+                                                color = if (!item.isIncome) RubyRoseSoft else OrosiOnSurfaceVariant,
+                                                maxLines = 1,
+                                                softWrap = false
+                                            )
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(50))
+                                                .background(if (item.isIncome) NishapurTurquoiseDeep else Color.Transparent)
+                                                .border(
+                                                    1.dp,
+                                                    if (item.isIncome) NishapurTurquoiseBright else Color.Transparent,
+                                                    RoundedCornerShape(50)
+                                                )
+                                                .clickable(enabled = targetTx == null) {
+                                                    onSetMultiItemType(idx, true)
+                                                }
+                                                .padding(horizontal = 9.dp, vertical = 3.dp)
+                                                .testTag("multi_voice_item_income_$idx")
+                                        ) {
+                                            Text(
+                                                text = "دریافتی",
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    fontWeight = if (item.isIncome) FontWeight.ExtraBold else FontWeight.Medium
+                                                ),
+                                                color = if (item.isIncome) NishapurTurquoiseSoft else OrosiOnSurfaceVariant,
+                                                maxLines = 1,
+                                                softWrap = false
+                                            )
+                                        }
                                     }
                                 }
                                 Text(
@@ -760,7 +745,9 @@ fun VoiceOverlayBottomSheet(
                                         PersianNumberUtils.formatToman(item.amountToman, showUnit = true)
                                     },
                                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
-                                    color = if (item.isIncome) NishapurTurquoiseSoft else RubyRoseSoft
+                                    color = if (item.isIncome) NishapurTurquoiseSoft else RubyRoseSoft,
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
                             }
 
@@ -849,7 +836,8 @@ fun VoiceOverlayBottomSheet(
                         Text(
                             text = when {
                                 targetTx != null -> voiceState.purposeCategory
-                                hasMixedMulti -> "+${PersianNumberUtils.formatToman(multiIncomeSum)} و −${PersianNumberUtils.formatToman(multiExpenseSum, showUnit = true)}"
+                                hasMixedMulti -> "دریافتی ${PersianNumberUtils.formatIncomeToman(multiIncomeSum, showUnit = false)} • پرداختی ${PersianNumberUtils.formatToman(multiExpenseSum, showUnit = true)}"
+                                multiItems.all { it.isIncome } -> PersianNumberUtils.formatIncomeToman(multiIncomeSum, showUnit = true)
                                 else -> PersianNumberUtils.formatToman(voiceState.totalAmountToman, showUnit = true)
                             },
                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
@@ -872,7 +860,7 @@ fun VoiceOverlayBottomSheet(
                                 color = OrosiOnSurfaceVariant
                             )
                             Text(
-                                text = if (voiceState.isIncome) "نوع: دریافتی (واریز +)" else "نوع: پرداختی (خرج)",
+                                text = if (voiceState.isIncome) "نوع: دریافتی" else "نوع: پرداختی",
                                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
                                 color = if (voiceState.isIncome) NishapurTurquoiseSoft else RubyRoseSoft
                             )
@@ -2582,6 +2570,543 @@ fun AddBankAccountBottomSheet(
             },
             confirmButton = {
                 OutlinedButton(onClick = { showSmsSenderPickerDialog = false }) {
+                    Text("بستن", color = AlabasterSilk)
+                }
+            }
+        )
+    }
+}
+
+private fun queryRecentInboxSmsRows(context: android.content.Context): List<InboxSmsPickerRow> {
+    val list = mutableListOf<InboxSmsPickerRow>()
+    try {
+        val cursor = context.contentResolver.query(
+            android.provider.Telephony.Sms.Inbox.CONTENT_URI,
+            arrayOf(
+                android.provider.Telephony.Sms._ID,
+                android.provider.Telephony.Sms.ADDRESS,
+                android.provider.Telephony.Sms.BODY,
+                android.provider.Telephony.Sms.DATE
+            ),
+            null,
+            null,
+            "${android.provider.Telephony.Sms.DATE} DESC"
+        )
+        cursor?.use { c ->
+            val idIdx = c.getColumnIndex(android.provider.Telephony.Sms._ID)
+            val addrIdx = c.getColumnIndex(android.provider.Telephony.Sms.ADDRESS)
+            val bodyIdx = c.getColumnIndex(android.provider.Telephony.Sms.BODY)
+            val dateIdx = c.getColumnIndex(android.provider.Telephony.Sms.DATE)
+            var count = 0
+            while (c.moveToNext() && count < 60) {
+                val addr = if (addrIdx >= 0) c.getString(addrIdx).orEmpty().trim() else ""
+                val body = if (bodyIdx >= 0) c.getString(bodyIdx).orEmpty().trim() else ""
+                val ts = if (dateIdx >= 0) c.getLong(dateIdx) else System.currentTimeMillis()
+                if (addr.isNotBlank() && body.isNotBlank()) {
+                    val j = JalaliCalendarUtils.timestampToJalali(ts)
+                    list.add(
+                        InboxSmsPickerRow(
+                            id = if (idIdx >= 0) c.getLong(idIdx) else count.toLong(),
+                            senderAddress = addr,
+                            body = body,
+                            dateStr = "${j.dateWithYear} • ${j.timeStr}"
+                        )
+                    )
+                    count++
+                }
+            }
+        }
+    } catch (_: Exception) {
+    }
+    return list
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun EditBankAccountBottomSheet(
+    account: BankAccountEntity,
+    existingCustomSenders: List<String>,
+    isRescanning: Boolean,
+    onSaveEdits: (
+        originalBankName: String,
+        newBankName: String,
+        balanceToman: Long,
+        isTankhah: Boolean,
+        addedSenders: List<String>,
+        removedSenders: List<String>
+    ) -> Unit,
+    onRescanBankFromSms: (bankName: String) -> Unit,
+    onDeleteAccount: (bankName: String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    var editedBankName by remember(account.bankName) { mutableStateOf(account.bankName) }
+    var balanceField by remember(account.bankName, account.balanceToman) {
+        val formatted = PersianNumberUtils.formatLiveAmountInput(account.balanceToman.toString())
+        mutableStateOf(TextFieldValue(text = formatted, selection = TextRange(formatted.length)))
+    }
+    var isTankhah by remember(account.bankName, account.isTankhah) { mutableStateOf(account.isTankhah) }
+    var currentCustomSenders by remember(account.bankName, existingCustomSenders) {
+        mutableStateOf(existingCustomSenders)
+    }
+    var removedSenders by remember(account.bankName) { mutableStateOf(listOf<String>()) }
+    var showSmsPickerDialog by remember { mutableStateOf(false) }
+    var recentInboxMessages by remember { mutableStateOf<List<InboxSmsPickerRow>>(emptyList()) }
+    var showDeleteConfirm by remember(account.bankName) { mutableStateOf(false) }
+
+    val defaultSenders = remember(editedBankName) {
+        com.example.domain.JibemanSmsEngine.BANK_PROFILES
+            .firstOrNull {
+                it.nameFa == editedBankName.trim() ||
+                    it.nameFa.replace("\u200C", " ") == editedBankName.trim().replace("\u200C", " ")
+            }
+            ?.senderIds
+            ?.take(4)
+            .orEmpty()
+    }
+
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = OrosiSurfaceLow,
+        contentColor = AlabasterSilk
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp)
+                .testTag("edit_bank_account_sheet"),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    BankLogoAvatar(bankName = account.bankName, size = 40.dp)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = "مدیریت حساب ${account.bankName}",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                            color = AlabasterSilk,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = if (account.isManual) "منبع دستی • قابل اتصال به سرشماره پیامکی" else "همگام‌سازی خودکار از پیامک بانک",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = OrosiOnSurfaceVariant
+                        )
+                    }
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "بستن",
+                        tint = OrosiOnSurfaceVariant
+                    )
+                }
+            }
+
+            OutlinedTextField(
+                value = editedBankName,
+                onValueChange = { editedBankName = it },
+                label = { Text("نام حساب / بانک", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("edit_account_name_input"),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = NishapurTurquoiseBright,
+                    unfocusedBorderColor = OrosiHairline
+                )
+            )
+
+            OutlinedTextField(
+                value = balanceField,
+                onValueChange = { balanceField = formatAmountTextFieldValue(it) },
+                label = { Text("مانده فعلی (تومان)", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("edit_account_balance_input"),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = SaffronGoldLight,
+                    unfocusedBorderColor = OrosiHairline
+                )
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(OrosiSurfaceContainer)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "حساب تنخواه / شرکت",
+                    style = MaterialTheme.typography.titleSmall.copy(fontSize = 13.sp),
+                    color = AlabasterSilk
+                )
+                Switch(
+                    checked = isTankhah,
+                    onCheckedChange = { isTankhah = it },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = AlabasterSilk,
+                        checkedTrackColor = NishapurTurquoise
+                    ),
+                    modifier = Modifier.testTag("edit_account_tankhah_switch")
+                )
+            }
+
+            // Linked SMS senders + Add from SMS + Instant Single-Bank Rescan
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(OrosiSurfaceContainer)
+                    .border(1.dp, OrosiHairline, RoundedCornerShape(16.dp))
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "سرشماره‌های پیامکی متصل",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = AlabasterSilk
+                )
+
+                if (defaultSenders.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        defaultSenders.forEach { sender ->
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(PersianLapis)
+                                    .border(1.dp, PersianLapisLight.copy(alpha = 0.4f), RoundedCornerShape(50))
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = PersianNumberUtils.formatLtrSender(sender),
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        textDirection = TextDirection.Ltr,
+                                        fontWeight = FontWeight.SemiBold
+                                    ),
+                                    color = NishapurTurquoiseSoft
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (currentCustomSenders.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        currentCustomSenders.forEach { sender ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(SaffronGold.copy(alpha = 0.2f))
+                                    .border(1.dp, SaffronGoldBright.copy(alpha = 0.6f), RoundedCornerShape(50))
+                                    .clickable {
+                                        currentCustomSenders = currentCustomSenders - sender
+                                        if (sender !in removedSenders) {
+                                            removedSenders = removedSenders + sender
+                                        }
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = PersianNumberUtils.formatLtrSender(sender),
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        textDirection = TextDirection.Ltr,
+                                        fontWeight = FontWeight.Bold
+                                    ),
+                                    color = SaffronGoldLight
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "حذف سرشماره",
+                                    tint = SaffronGoldLight,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        recentInboxMessages = queryRecentInboxSmsRows(context)
+                        showSmsPickerDialog = true
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("edit_account_add_sender_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = null,
+                        tint = NishapurTurquoiseBright,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "+ افزودن سرشماره از پیامک‌ها",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                        color = NishapurTurquoiseSoft
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = { onRescanBankFromSms(account.bankName) },
+                    enabled = !isRescanning,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("rescan_single_bank_button")
+                ) {
+                    if (isRescanning) {
+                        CircularProgressIndicator(
+                            color = NishapurTurquoiseBright,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Sync,
+                            contentDescription = null,
+                            tint = NishapurTurquoiseBright,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (isRescanning) "در حال جستجوی پیامک‌های بانک..." else "بازخوانی موجودی این بانک از پیامک‌ها",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                        color = AlabasterSilk
+                    )
+                }
+            }
+
+            Button(
+                onClick = {
+                    val parsedBalance = PersianNumberUtils.parseAmountInputToLong(balanceField.text) ?: 0L
+                    val added = currentCustomSenders.filter { it !in existingCustomSenders }
+                    onSaveEdits(
+                        account.bankName,
+                        editedBankName.trim().ifEmpty { account.bankName },
+                        parsedBalance,
+                        isTankhah,
+                        added,
+                        removedSenders
+                    )
+                },
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = NishapurTurquoise,
+                    contentColor = AlabasterSilk
+                ),
+                contentPadding = PaddingValues(vertical = 15.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, NishapurTurquoiseBright, RoundedCornerShape(16.dp))
+                    .testTag("save_edited_account_button")
+            ) {
+                Icon(imageVector = Icons.Default.Check, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "ذخیره تغییرات",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+            }
+
+            if (!showDeleteConfirm) {
+                OutlinedButton(
+                    onClick = { showDeleteConfirm = true },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("delete_account_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.DeleteOutline,
+                        contentDescription = null,
+                        tint = RubyRoseSoft,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "حذف این حساب",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                        color = RubyRoseSoft
+                    )
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(RubyRose.copy(alpha = 0.22f))
+                        .border(1.dp, RubyRoseSoft, RoundedCornerShape(14.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "حساب «${account.bankName}» از فهرست حساب‌ها حذف شود؟ (تراکنش‌های قبلی شما حفظ می‌شوند)",
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                        color = AlabasterSilk
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { onDeleteAccount(account.bankName) },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = RubyRose,
+                                contentColor = AlabasterSilk
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("confirm_delete_account_button")
+                        ) {
+                            Text(
+                                text = "حذف قطعی",
+                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold)
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = { showDeleteConfirm = false },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("انصراف", color = AlabasterSilk)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showSmsPickerDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showSmsPickerDialog = false },
+            containerColor = OrosiSurfaceLow,
+            titleContentColor = AlabasterSilk,
+            textContentColor = AlabasterSilk,
+            title = {
+                Text(
+                    text = "انتخاب سرشماره از پیامک‌های اخیر",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+            },
+            text = {
+                if (recentInboxMessages.isEmpty()) {
+                    Text(
+                        text = "پیامکی در صندوق ورودی یافت نشد یا دسترسی پیامک هنوز تأیید نشده است.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = OrosiOnSurfaceVariant
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(360.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        recentInboxMessages.forEach { smsItem ->
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(OrosiSurfaceContainer)
+                                    .border(1.dp, OrosiHairline, RoundedCornerShape(14.dp))
+                                    .padding(12.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = PersianNumberUtils.formatLtrSender(smsItem.senderAddress),
+                                            style = MaterialTheme.typography.labelLarge.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                textDirection = TextDirection.Ltr
+                                            ),
+                                            color = NishapurTurquoiseSoft,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = smsItem.dateStr,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = OrosiOnSurfaceVariant,
+                                            maxLines = 1
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(NishapurTurquoise)
+                                            .clickable {
+                                                if (smsItem.senderAddress !in currentCustomSenders) {
+                                                    currentCustomSenders = currentCustomSenders + smsItem.senderAddress
+                                                }
+                                                removedSenders = removedSenders - smsItem.senderAddress
+                                                showSmsPickerDialog = false
+                                            }
+                                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                                    ) {
+                                        Text(
+                                            text = "انتخاب",
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = AlabasterSilk
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = smsItem.body.replace("\n", " "),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = AlabasterSilk,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                OutlinedButton(onClick = { showSmsPickerDialog = false }) {
                     Text("بستن", color = AlabasterSilk)
                 }
             }

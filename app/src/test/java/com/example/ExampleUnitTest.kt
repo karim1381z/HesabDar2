@@ -577,6 +577,86 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun testVideo99BatchVoiceNluBrandNumbersDativeCompoundsAndSales() {
+        // 1. Video 99batch_16: "۵۵ هزار تومان به سایت ۵۰۴۰ دادم" -> title "سایت ۵۰۴۰", amount 55,000, expense
+        val site5040 = PersianVoiceSlangParserEngine.parseVoiceCommand("۵۵ هزار تومان به سایت ۵۰۴۰ دادم")
+        assertEquals("سایت ۵۰۴۰", site5040.purposeCategory)
+        assertEquals(55_000L, site5040.totalAmountToman)
+        assertEquals(false, site5040.isIncome)
+
+        // 2. Explicit currency amount (5,000) beats bare identifier number (5040)
+        val site5040Small = PersianVoiceSlangParserEngine.parseVoiceCommand("۵ هزار تومان به سایت ۵۰۴۰ دادم")
+        assertEquals("سایت ۵۰۴۰", site5040Small.purposeCategory)
+        assertEquals(5_000L, site5040Small.totalAmountToman)
+        assertEquals(false, site5040Small.isIncome)
+
+        // 3. Video 99batch_17: Mixed 3-item utterance with dative compound "به فقیر کمک کردم" -> "کمک به فقیر"
+        val mixed3 = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(
+            "سلام مبلغ ۵۰ هزار تومان برای بستنی خرج کردم ۳۵ هزار تومان طلب دریافت کردم و ۲۵ هزار تومان به فقیر کمک کردم"
+        )
+        assertEquals(3, mixed3.size)
+        assertEquals("بستنی", mixed3[0].purposeCategory)
+        assertEquals(50_000L, mixed3[0].totalAmountToman)
+        assertEquals(false, mixed3[0].isIncome)
+
+        assertEquals("طلب", mixed3[1].purposeCategory)
+        assertEquals(35_000L, mixed3[1].totalAmountToman)
+        assertEquals(true, mixed3[1].isIncome)
+
+        assertEquals("کمک به فقیر", mixed3[2].purposeCategory)
+        assertEquals(25_000L, mixed3[2].totalAmountToman)
+        assertEquals(false, mixed3[2].isIncome)
+
+        // 4. Video 99batch_17: Negated clause + replacement "به جاش" + 1st-person sale "۳۵ هزار گوجه فروختم"
+        val negatedAndSale = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(
+            "۵۰ هزار تومان می‌خواستم خرج کنم ولی نکردم به جاش ۴۵ هزار تومان طلب دریافت کردم ۳۵ هزار گوجه فروختم"
+        )
+        assertEquals(2, negatedAndSale.size)
+        assertEquals("طلب", negatedAndSale[0].purposeCategory)
+        assertEquals(45_000L, negatedAndSale[0].totalAmountToman)
+        assertEquals(true, negatedAndSale[0].isIncome)
+
+        assertEquals("فروش گوجه", negatedAndSale[1].purposeCategory)
+        assertEquals(35_000L, negatedAndSale[1].totalAmountToman)
+        assertEquals(true, negatedAndSale[1].isIncome)
+
+        // 5. Generalization of dative light-verb normalization ("هدیه به علی")
+        val giftToAli = PersianVoiceSlangParserEngine.parseVoiceCommand("۱۰۰ تومن به علی هدیه دادم")
+        assertEquals("هدیه به علی", giftToAli.purposeCategory)
+        assertEquals(100_000L, giftToAli.totalAmountToman)
+        assertEquals(false, giftToAli.isIncome)
+    }
+
+    @Test
+    fun testJalaliToGregorianMonthRangeAndSepahBalanceExtraction() {
+        // 1. Jalali -> Gregorian round-trip including leap year 1403 and Aban 1405
+        val (gy1, gm1, gd1) = JalaliCalendarUtils.jalaliToGregorian(1403, 12, 30)
+        assertEquals(Triple(2025, 3, 20), Triple(gy1, gm1, gd1))
+
+        val (gy2, gm2, gd2) = JalaliCalendarUtils.jalaliToGregorian(1405, 8, 23)
+        assertEquals(Triple(2026, 11, 14), Triple(gy2, gm2, gd2))
+
+        // Month epoch range covers exact start/end of Aban 1405
+        val (startMs, endMs) = JalaliCalendarUtils.jalaliMonthEpochRangeMillis(1405, 8)
+        val startJ = JalaliCalendarUtils.fromTimestamp(startMs + 60_000L)
+        val endPrevJ = JalaliCalendarUtils.fromTimestamp(endMs - 60_000L)
+        val endNextJ = JalaliCalendarUtils.fromTimestamp(endMs + 60_000L)
+        assertEquals(140508, startJ.yearMonthKey)
+        assertEquals(140508, endPrevJ.yearMonthKey)
+        assertEquals(140509, endNextJ.yearMonthKey)
+        assertEquals(140412, JalaliCalendarUtils.shiftJalaliYearMonth(140501, -1))
+        assertEquals(140501, JalaliCalendarUtils.shiftJalaliYearMonth(140412, 1))
+
+        // 2. Sepah extended senders & balance-only SMS extraction
+        assertEquals("سپه", JibemanSmsEngine.resolveBank("BankSepah")?.nameFa)
+        assertEquals("سپه", JibemanSmsEngine.resolveBank("+98200015")?.nameFa)
+        assertEquals("سپه", JibemanSmsEngine.resolveBank("+9830002015")?.nameFa)
+
+        val balanceOnlySms = "بانک سپه\nموجودی قابل برداشت: ۹,۵۰۰,۰۰۰ ریال"
+        assertEquals(9_500_000L, JibemanSmsEngine.extractBalanceRial(balanceOnlySms))
+    }
+
+    @Test
     fun testFullOrosiRegressionAndStressSuitePasses100Percent() {
         val report = com.example.domain.OrosiRegressionSuite.runFullRegressionAndStressSuite()
         for (r in report.results) {

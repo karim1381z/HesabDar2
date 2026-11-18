@@ -3,6 +3,7 @@ package com.example.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -64,6 +66,7 @@ fun AccountsScreen(
     tankhahModeEnabled: Boolean = false,
     onSetTankhahModeEnabled: (Boolean) -> Unit = {},
     onToggleTankhah: (String) -> Unit,
+    onAccountClick: (BankAccountEntity) -> Unit = {},
     onOpenAddAccountModal: () -> Unit,
     onBackToHome: () -> Unit,
     modifier: Modifier = Modifier
@@ -265,7 +268,7 @@ fun AccountsScreen(
             }
         }
 
-        // 4. List of all bank accounts detected from SMS
+        // 4. List of all bank accounts detected from SMS (tap any card to edit, rescan SMS, or delete)
         items(
             items = bankAccounts,
             key = { it.bankName }
@@ -274,6 +277,7 @@ fun AccountsScreen(
                 account = account,
                 hideAmounts = hideAmounts,
                 tankhahModeEnabled = tankhahModeEnabled,
+                onClick = { onAccountClick(account) },
                 onToggleTankhah = { onToggleTankhah(account.bankName) }
             )
         }
@@ -311,6 +315,7 @@ private fun BankAccountRowCard(
     account: BankAccountEntity,
     hideAmounts: Boolean,
     tankhahModeEnabled: Boolean,
+    onClick: () -> Unit,
     onToggleTankhah: () -> Unit
 ) {
     val lastUpdatedJalali = JalaliCalendarUtils.fromTimestamp(account.lastUpdatedTimestamp)
@@ -325,6 +330,7 @@ private fun BankAccountRowCard(
                 if (tankhahModeEnabled && account.isTankhah) NishapurTurquoiseBright.copy(alpha = 0.45f) else OrosiHairline,
                 RoundedCornerShape(20.dp)
             )
+            .clickable(onClick = onClick)
             .padding(18.dp)
             .testTag("account_card_${account.bankName}"),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -374,11 +380,23 @@ private fun BankAccountRowCard(
                     ),
                     color = if (account.balanceToman > 0L) NishapurTurquoiseSoft else SaffronGoldLight
                 )
-                Text(
-                    text = "مانده حساب",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = OrosiOnSurfaceVariant
-                )
+                Spacer(modifier = Modifier.height(3.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "ویرایش حساب",
+                        tint = PersianLapisLight,
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Text(
+                        text = "مدیریت و ویرایش",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = PersianLapisLight
+                    )
+                }
             }
         }
 

@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -79,6 +80,7 @@ fun TransactionsScreen(
     transactions: List<TransactionEntity>,
     selectedYearMonthKey: Int,
     hideAmounts: Boolean,
+    isLoadingSelectedMonth: Boolean = false,
     onChangeMonth: (Int) -> Unit,
     onTransactionClick: (TransactionEntity) -> Unit,
     onUntaggedMicClick: (TransactionEntity) -> Unit,
@@ -313,7 +315,38 @@ fun TransactionsScreen(
             }
         }
 
-        if (sortedDayGroups.isEmpty()) {
+        if (isLoadingSelectedMonth) {
+            item(key = "month_loading_banner") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(OrosiSurfaceHigh)
+                        .border(1.dp, NishapurTurquoiseBright.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+                        .padding(horizontal = 16.dp, vertical = 14.dp)
+                        .testTag("month_loading_shimmer"),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "در حال خواندن پیامک‌های $monthHeaderLabel...",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = NishapurTurquoiseSoft
+                    )
+                    LinearProgressIndicator(
+                        color = NishapurTurquoiseBright,
+                        trackColor = OrosiSurfaceContainer,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(50))
+                    )
+                }
+            }
+            items(4, key = { "month_shimmer_row_$it" }) {
+                val shimmerBrush = orosiShimmerBrush()
+                TransactionRowSkeletonShimmer(shimmerBrush = shimmerBrush)
+            }
+        } else if (sortedDayGroups.isEmpty()) {
             item {
                 Column(
                     modifier = Modifier
@@ -340,7 +373,7 @@ fun TransactionsScreen(
                     val formattedDayNet = when {
                         hideAmounts -> "**** تومان"
                         dayGroup.dayNetSumToman < 0L ->
-                            "\u2066\u200E-${PersianNumberUtils.formatToman(kotlin.math.abs(dayGroup.dayNetSumToman), showUnit = false)}\u2069 تومان"
+                            "پرداختی ${PersianNumberUtils.formatToman(kotlin.math.abs(dayGroup.dayNetSumToman), showUnit = true)}"
                         dayGroup.dayNetSumToman > 0L ->
                             PersianNumberUtils.formatIncomeToman(dayGroup.dayNetSumToman, showUnit = true)
                         else -> "۰ تومان"

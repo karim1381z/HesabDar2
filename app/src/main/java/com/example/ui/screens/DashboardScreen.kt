@@ -143,6 +143,9 @@ fun DashboardScreen(
         visibleTransactions.take(20)
     }
 
+    val isInitialSkeletonLoading = isSyncingSms && bankAccounts.isEmpty() && visibleTransactions.isEmpty()
+    val shimmerBrush = if (isInitialSkeletonLoading) orosiShimmerBrush() else null
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -150,7 +153,7 @@ fun DashboardScreen(
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        if (isSyncingSms) {
+        if (isSyncingSms && !isInitialSkeletonLoading) {
             item(key = "sms_sync_banner", contentType = "sync_banner") {
                 Row(
                     modifier = Modifier
@@ -188,6 +191,8 @@ fun DashboardScreen(
                 tankhahModeEnabled = settings.tankhahModeEnabled,
                 onlyTankhahMode = settings.onlyTankhahMode,
                 isSyncingSms = isSyncingSms,
+                showInitialShimmer = isInitialSkeletonLoading,
+                shimmerBrush = shimmerBrush,
                 onToggleHideAmounts = onToggleHideAmounts,
                 onSetOnlyTankhahMode = onSetOnlyTankhahMode,
                 onClick = onHeroCardClick
@@ -228,17 +233,26 @@ fun DashboardScreen(
                         .testTag("bank_accounts_carousel"),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(
-                        items = bankAccounts,
-                        key = { it.bankName }
-                    ) { account ->
-                        BankAccountCarouselCard(
-                            account = account,
-                            hideAmounts = settings.hideAmounts,
-                            showTankhahBadge = settings.tankhahModeEnabled,
-                            onCardClick = onOpenAccountsTab,
-                            onToggleTankhah = { onToggleAccountTankhah(account.bankName) }
-                        )
+                    if (isInitialSkeletonLoading && shimmerBrush != null) {
+                        items(2) { idx ->
+                            AccountCardSkeletonShimmer(
+                                shimmerBrush = shimmerBrush,
+                                modifier = Modifier.testTag("account_shimmer_card_$idx")
+                            )
+                        }
+                    } else {
+                        items(
+                            items = bankAccounts,
+                            key = { it.bankName }
+                        ) { account ->
+                            BankAccountCarouselCard(
+                                account = account,
+                                hideAmounts = settings.hideAmounts,
+                                showTankhahBadge = settings.tankhahModeEnabled,
+                                onCardClick = onOpenAccountsTab,
+                                onToggleTankhah = { onToggleAccountTankhah(account.bankName) }
+                            )
+                        }
                     }
                 }
             }
@@ -294,23 +308,32 @@ fun DashboardScreen(
             }
         }
 
-        // 4. Recent Transaction Cards (Top 20 on Home for 120Hz butter-smooth scroll + Long-Press 2-step delete)
-        items(
-            items = recentTransactions,
-            key = { tx -> tx.id },
-            contentType = { "transaction_card" }
-        ) { tx ->
-            TwoStepSwipeToDeleteWrapper(
-                transactionId = tx.id,
-                onConfirmDelete = { onDeleteTransaction(tx) }
-            ) { onTriggerDeleteReveal ->
-                CalmTransactionCard(
-                    transaction = tx,
-                    hideAmounts = settings.hideAmounts,
-                    onRowClick = { onTransactionClick(tx) },
-                    onRowLongClick = onTriggerDeleteReveal,
-                    onUntaggedMicClick = { onUntaggedMicClick(tx) }
+        // 4. Recent Transaction Cards (or Calm Shimmer Skeletons during initial inbox scan)
+        if (isInitialSkeletonLoading && shimmerBrush != null) {
+            items(4, key = { "home_tx_shimmer_$it" }) { idx ->
+                TransactionRowSkeletonShimmer(
+                    shimmerBrush = shimmerBrush,
+                    modifier = Modifier.testTag("tx_shimmer_card_$idx")
                 )
+            }
+        } else {
+            items(
+                items = recentTransactions,
+                key = { tx -> tx.id },
+                contentType = { "transaction_card" }
+            ) { tx ->
+                TwoStepSwipeToDeleteWrapper(
+                    transactionId = tx.id,
+                    onConfirmDelete = { onDeleteTransaction(tx) }
+                ) { onTriggerDeleteReveal ->
+                    CalmTransactionCard(
+                        transaction = tx,
+                        hideAmounts = settings.hideAmounts,
+                        onRowClick = { onTransactionClick(tx) },
+                        onRowLongClick = onTriggerDeleteReveal,
+                        onUntaggedMicClick = { onUntaggedMicClick(tx) }
+                    )
+                }
             }
         }
 
@@ -458,6 +481,8 @@ private fun JibemanFinancialStatusHeroCard(
     tankhahModeEnabled: Boolean,
     onlyTankhahMode: Boolean,
     isSyncingSms: Boolean = false,
+    showInitialShimmer: Boolean = false,
+    shimmerBrush: Brush? = null,
     onToggleHideAmounts: () -> Unit,
     onSetOnlyTankhahMode: (Boolean) -> Unit,
     onClick: () -> Unit
@@ -668,39 +693,59 @@ private fun JibemanFinancialStatusHeroCard(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                Text(
-                    text = formattedFreeBalance,
-                    style = MaterialTheme.typography.headlineMedium.copy(
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 28.sp,
-                        lineHeight = 34.sp
-                    ),
-                    color = AlabasterSilk,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    softWrap = false,
-                    modifier = Modifier.testTag("hero_peace_of_mind_amount")
-                )
+                if (showInitialShimmer && shimmerBrush != null) {
+                    Box(
+                        modifier = Modifier
+                            .width(196.dp)
+                            .height(34.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(shimmerBrush)
+                            .testTag("hero_balance_shimmer")
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "در حال دریافت موجودی همه بانک‌ها...",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Medium
+                        ),
+                        color = NishapurTurquoiseSoft
+                    )
+                } else {
+                    Text(
+                        text = formattedFreeBalance,
+                        style = MaterialTheme.typography.headlineMedium.copy(
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 28.sp,
+                            lineHeight = 34.sp
+                        ),
+                        color = AlabasterSilk,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.testTag("hero_peace_of_mind_amount")
+                    )
 
-                AnimatedVisibility(visible = isSyncingSms) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(top = 6.dp)
-                    ) {
-                        LinearProgressIndicator(
-                            color = NishapurTurquoiseBright,
-                            trackColor = Color.White.copy(alpha = 0.16f),
-                            modifier = Modifier
-                                .width(140.dp)
-                                .height(3.dp)
-                                .clip(RoundedCornerShape(50))
-                        )
-                        Spacer(modifier = Modifier.height(3.dp))
-                        Text(
-                            text = "در حال به‌روزرسانی مانده بانک‌ها...",
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
-                            color = NishapurTurquoiseSoft
-                        )
+                    AnimatedVisibility(visible = isSyncingSms) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(top = 6.dp)
+                        ) {
+                            LinearProgressIndicator(
+                                color = NishapurTurquoiseBright,
+                                trackColor = Color.White.copy(alpha = 0.16f),
+                                modifier = Modifier
+                                    .width(140.dp)
+                                    .height(3.dp)
+                                    .clip(RoundedCornerShape(50))
+                            )
+                            Spacer(modifier = Modifier.height(3.dp))
+                            Text(
+                                text = "در حال به‌روزرسانی مانده بانک‌ها...",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                                color = NishapurTurquoiseSoft
+                            )
+                        }
                     }
                 }
             }
@@ -749,13 +794,23 @@ private fun JibemanFinancialStatusHeroCard(
                             color = PersianLapisLight
                         )
                     }
-                    Text(
-                        text = formattedTotalBalance,
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = NishapurTurquoiseSoft,
-                        maxLines = 1,
-                        softWrap = false
-                    )
+                    if (showInitialShimmer && shimmerBrush != null) {
+                        Box(
+                            modifier = Modifier
+                                .width(92.dp)
+                                .height(16.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(shimmerBrush)
+                        )
+                    } else {
+                        Text(
+                            text = formattedTotalBalance,
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = NishapurTurquoiseSoft,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
                 }
 
                 Row(
@@ -780,16 +835,149 @@ private fun JibemanFinancialStatusHeroCard(
                             color = PersianLapisLight
                         )
                     }
-                    Text(
-                        text = formattedCommitments,
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = RubyRoseSoft,
-                        maxLines = 1,
-                        softWrap = false
-                    )
+                    if (showInitialShimmer && shimmerBrush != null) {
+                        Box(
+                            modifier = Modifier
+                                .width(72.dp)
+                                .height(16.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(shimmerBrush)
+                        )
+                    } else {
+                        Text(
+                            text = formattedCommitments,
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = RubyRoseSoft,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+internal fun orosiShimmerBrush(): Brush {
+    val transition = rememberInfiniteTransition(label = "orosiShimmer")
+    val translateAnim by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 900f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1250, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "shimmerTranslate"
+    )
+    return Brush.linearGradient(
+        colors = listOf(
+            OrosiSurfaceContainer.copy(alpha = 0.85f),
+            PersianLapisLight.copy(alpha = 0.28f),
+            OrosiSurfaceContainer.copy(alpha = 0.85f)
+        ),
+        start = Offset(translateAnim - 300f, 0f),
+        end = Offset(translateAnim, 200f)
+    )
+}
+
+@Composable
+private fun AccountCardSkeletonShimmer(
+    shimmerBrush: Brush,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .width(184.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(OrosiSurfaceHigh)
+            .border(1.dp, OrosiHairline, RoundedCornerShape(20.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(shimmerBrush)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Box(
+                modifier = Modifier
+                    .width(74.dp)
+                    .height(14.dp)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(shimmerBrush)
+            )
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(
+                modifier = Modifier
+                    .width(60.dp)
+                    .height(10.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(shimmerBrush)
+            )
+            Box(
+                modifier = Modifier
+                    .width(116.dp)
+                    .height(16.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(shimmerBrush)
+            )
+        }
+    }
+}
+
+@Composable
+internal fun TransactionRowSkeletonShimmer(
+    shimmerBrush: Brush,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(OrosiSurfaceContainer)
+            .border(1.dp, OrosiHairline, RoundedCornerShape(20.dp))
+            .padding(horizontal = 14.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(shimmerBrush)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.62f)
+                    .height(14.dp)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(shimmerBrush)
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.42f)
+                    .height(11.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(shimmerBrush)
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Box(
+            modifier = Modifier
+                .width(78.dp)
+                .height(16.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(shimmerBrush)
+        )
     }
 }
 

@@ -85,6 +85,7 @@ import com.example.ui.OrosiViewModel
 import com.example.ui.components.AddBankAccountBottomSheet
 import com.example.ui.components.AddCommitmentBottomSheet
 import com.example.ui.components.CommitmentActionBottomSheet
+import com.example.ui.components.EditBankAccountBottomSheet
 import com.example.ui.components.HeroMathBreakdownBottomSheet
 import com.example.ui.components.PaydayAndBackupBottomSheet
 import com.example.ui.components.SmsSimulatorBottomSheet
@@ -359,6 +360,7 @@ fun OrosiFinanceApp(
                             transactions = uiState.transactions,
                             selectedYearMonthKey = uiState.selectedYearMonthKey,
                             hideAmounts = uiState.settings.hideAmounts,
+                            isLoadingSelectedMonth = uiState.loadingMonthKey == uiState.selectedYearMonthKey,
                             onChangeMonth = { delta -> viewModel.changeSelectedMonth(delta) },
                             onTransactionClick = { tx -> viewModel.openTransactionDetails(tx) },
                             onUntaggedMicClick = { tx ->
@@ -376,6 +378,7 @@ fun OrosiFinanceApp(
                             tankhahModeEnabled = uiState.settings.tankhahModeEnabled,
                             onSetTankhahModeEnabled = { viewModel.setTankhahModeEnabled(it) },
                             onToggleTankhah = { bankName -> viewModel.toggleAccountTankhah(bankName) },
+                            onAccountClick = { account -> viewModel.openAccountEditSheet(account) },
                             onOpenAddAccountModal = { viewModel.setShowAddBankAccountModal(true) },
                             onBackToHome = { viewModel.navigateTo(OrosiScreen.HOME) }
                         )
@@ -456,6 +459,9 @@ fun OrosiFinanceApp(
             onToggleMultiItemType = { idx ->
                 viewModel.onToggleMultiVoiceItemType(idx)
             },
+            onSetMultiItemType = { idx, isIncome ->
+                viewModel.onSetMultiVoiceItemType(idx, isIncome)
+            },
             onSimulateVoiceRecord = { viewModel.triggerVoiceSimulation(null) },
             onConfirmVoiceEntry = { viewModel.confirmVoiceEntry() },
             onDismiss = { viewModel.dismissVoiceOverlay() }
@@ -509,6 +515,28 @@ fun OrosiFinanceApp(
                 viewModel.addOrUpdateBankAccount(bankName, balanceToman, isTankhah, cardLast4, customSenders)
             },
             onDismiss = { viewModel.setShowAddBankAccountModal(false) }
+        )
+    }
+
+    val editingAccount = uiState.selectedAccountForEdit
+    if (editingAccount != null) {
+        EditBankAccountBottomSheet(
+            account = editingAccount,
+            existingCustomSenders = uiState.selectedAccountCustomSenders,
+            isRescanning = uiState.isRescanningSingleBank,
+            onSaveEdits = { origName, newName, balance, isTankhah, addedSenders, removedSenders ->
+                viewModel.saveBankAccountEdits(
+                    originalBankName = origName,
+                    newBankName = newName,
+                    balanceToman = balance,
+                    isTankhah = isTankhah,
+                    addedSenders = addedSenders,
+                    removedSenders = removedSenders
+                )
+            },
+            onRescanBankFromSms = { bankName -> viewModel.rescanSingleBank(bankName) },
+            onDeleteAccount = { bankName -> viewModel.deleteBankAccount(bankName) },
+            onDismiss = { viewModel.dismissAccountEditSheet() }
         )
     }
 
