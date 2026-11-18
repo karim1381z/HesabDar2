@@ -453,6 +453,9 @@ fun OrosiFinanceApp(
             onUpdateMultiItem = { idx, title, amt ->
                 viewModel.onUpdateMultiVoiceItem(idx, title, amt)
             },
+            onToggleMultiItemType = { idx ->
+                viewModel.onToggleMultiVoiceItemType(idx)
+            },
             onSimulateVoiceRecord = { viewModel.triggerVoiceSimulation(null) },
             onConfirmVoiceEntry = { viewModel.confirmVoiceEntry() },
             onDismiss = { viewModel.dismissVoiceOverlay() }

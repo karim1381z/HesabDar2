@@ -480,19 +480,6 @@ private fun JibemanFinancialStatusHeroCard(
 
     val freeBalance = (selectedTotalBalance - unpaidCommitmentsToman).coerceAtLeast(0L)
 
-    val animatedFreeBalanceFloat by animateFloatAsState(
-        targetValue = freeBalance.toFloat(),
-        animationSpec = tween(durationMillis = 550, easing = FastOutSlowInEasing),
-        label = "animatedFreeBalance"
-    )
-    val animatedTotalBalanceFloat by animateFloatAsState(
-        targetValue = selectedTotalBalance.toFloat(),
-        animationSpec = tween(durationMillis = 550, easing = FastOutSlowInEasing),
-        label = "animatedTotalBalance"
-    )
-    val displayedFreeBalance = kotlin.math.round(animatedFreeBalanceFloat.toDouble()).toLong().coerceAtLeast(0L)
-    val displayedTotalBalance = kotlin.math.round(animatedTotalBalanceFloat.toDouble()).toLong().coerceAtLeast(0L)
-
     val denom = (selectedTotalBalance + unpaidCommitmentsToman).coerceAtLeast(1L)
     val progressRatio = if (selectedTotalBalance > 0L) {
         (freeBalance.toFloat() / denom.toFloat()).coerceIn(0.12f, 1f)
@@ -500,29 +487,56 @@ private fun JibemanFinancialStatusHeroCard(
         0.5f
     }
 
+    val heroBgBrush = remember {
+        Brush.linearGradient(
+            colors = listOf(
+                PersianLapisGlow,
+                PersianLapis,
+                PersianLapisDeep
+            ),
+            start = Offset(0f, 0f),
+            end = Offset(900f, 700f)
+        )
+    }
+    val heroBorderBrush = remember {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.26f),
+                PersianLapisLight.copy(alpha = 0.12f)
+            )
+        )
+    }
+    val formattedFreeBalance = remember(freeBalance, hideAmounts) {
+        PersianNumberUtils.formatToman(
+            freeBalance,
+            showUnit = true,
+            hideAmount = hideAmounts
+        )
+    }
+    val formattedTotalBalance = remember(selectedTotalBalance, hideAmounts) {
+        PersianNumberUtils.formatToman(
+            selectedTotalBalance,
+            showUnit = true,
+            hideAmount = hideAmounts
+        )
+    }
+    val formattedCommitments = remember(unpaidCommitmentsToman, hideAmounts) {
+        PersianNumberUtils.formatToman(
+            unpaidCommitmentsToman,
+            showUnit = true,
+            hideAmount = hideAmounts
+        )
+    }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .graphicsLayer()
             .clip(RoundedCornerShape(28.dp))
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(
-                        PersianLapisGlow,
-                        PersianLapis,
-                        PersianLapisDeep
-                    ),
-                    start = Offset(0f, 0f),
-                    end = Offset(900f, 700f)
-                )
-            )
+            .background(heroBgBrush)
             .border(
                 width = 1.dp,
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        Color.White.copy(alpha = 0.26f),
-                        PersianLapisLight.copy(alpha = 0.12f)
-                    )
-                ),
+                brush = heroBorderBrush,
                 shape = RoundedCornerShape(28.dp)
             )
             .clickable(onClick = onClick)
@@ -655,11 +669,7 @@ private fun JibemanFinancialStatusHeroCard(
                 Spacer(modifier = Modifier.height(6.dp))
 
                 Text(
-                    text = PersianNumberUtils.formatToman(
-                        displayedFreeBalance,
-                        showUnit = true,
-                        hideAmount = hideAmounts
-                    ),
+                    text = formattedFreeBalance,
                     style = MaterialTheme.typography.headlineMedium.copy(
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 28.sp,
@@ -740,11 +750,7 @@ private fun JibemanFinancialStatusHeroCard(
                         )
                     }
                     Text(
-                        text = PersianNumberUtils.formatToman(
-                            displayedTotalBalance,
-                            showUnit = true,
-                            hideAmount = hideAmounts
-                        ),
+                        text = formattedTotalBalance,
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                         color = NishapurTurquoiseSoft,
                         maxLines = 1,
@@ -775,11 +781,7 @@ private fun JibemanFinancialStatusHeroCard(
                         )
                     }
                     Text(
-                        text = PersianNumberUtils.formatToman(
-                            unpaidCommitmentsToman,
-                            showUnit = true,
-                            hideAmount = hideAmounts
-                        ),
+                        text = formattedCommitments,
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                         color = RubyRoseSoft,
                         maxLines = 1,
@@ -919,14 +921,11 @@ fun CalmTransactionCard(
         else -> RubyRoseSoft
     }
 
-    val shortBank = androidx.compose.runtime.remember(transaction.bankName, transaction.cardInfo) {
-        transaction.shortBankName
-    }
-    val rowTitle = androidx.compose.runtime.remember(
+    val shortBank = transaction.shortBankName
+    val rowTitle = remember(
         transaction.isUntagged,
         transaction.title,
-        transaction.purpose,
-        transaction.storeName,
+        transaction.displayTitle,
         shortBank
     ) {
         if (transaction.isUntagged) {
@@ -935,10 +934,8 @@ fun CalmTransactionCard(
             transaction.title.ifBlank { transaction.displayTitle }
         }
     }
-    val subtitleText = androidx.compose.runtime.remember(transaction.timestamp, shortBank) {
-        transaction.simpleSubtitle
-    }
-    val formattedSingleLineAmount = androidx.compose.runtime.remember(
+    val subtitleText = transaction.simpleSubtitle
+    val formattedSingleLineAmount = remember(
         transaction.type,
         transaction.userShareToman,
         transaction.totalAmountToman,
@@ -992,11 +989,10 @@ fun CalmTransactionCard(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = rowTitle,
-                style = MaterialTheme.typography.titleMedium.copy(
-                    fontWeight = FontWeight.Bold,
-                    fontSize = if (rowTitle.length > 22) 13.8.sp else 15.5.sp,
-                    lineHeight = 20.sp
-                ),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                fontSize = if (rowTitle.length > 22) 13.8.sp else 15.5.sp,
+                lineHeight = 20.sp,
                 color = AlabasterSilk,
                 maxLines = 3,
                 softWrap = true,
@@ -1005,10 +1001,9 @@ fun CalmTransactionCard(
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = subtitleText,
-                style = MaterialTheme.typography.bodySmall.copy(
-                    fontSize = 11.5.sp,
-                    lineHeight = 17.sp
-                ),
+                style = MaterialTheme.typography.bodySmall,
+                fontSize = 11.5.sp,
+                lineHeight = 17.sp,
                 color = OrosiOnSurfaceVariant,
                 maxLines = 2,
                 softWrap = true,
@@ -1028,10 +1023,9 @@ fun CalmTransactionCard(
 
         Text(
             text = formattedSingleLineAmount,
-            style = MaterialTheme.typography.titleSmall.copy(
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 15.sp
-            ),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.ExtraBold,
+            fontSize = 15.sp,
             color = amountColor,
             maxLines = 1,
             softWrap = false

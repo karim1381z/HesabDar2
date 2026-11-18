@@ -559,6 +559,21 @@ class ExampleUnitTest {
         assertEquals(true, received50.isIncome)
         assertEquals("دریافت وجه", received50.purposeCategory)
         assertEquals(50_000L, received50.totalAmountToman)
+
+        // 4. Video Screenrecorder-2026-11-18 (00:24): Mixed Income + Expense compound sentence
+        // "حقوق من ۵۰ هزار تومان بود و ۲۵ هزار تومانش رو خرج کردم"
+        val mixedSentence = "حقوق من ۵۰ هزار تومان بود و ۲۵ هزار تومانش رو خرج کردم"
+        val mixedItems = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(mixedSentence)
+        assertEquals(2, mixedItems.size)
+        assertEquals("حقوق", mixedItems[0].purposeCategory)
+        assertEquals(50_000L, mixedItems[0].totalAmountToman)
+        assertEquals(true, mixedItems[0].isIncome)
+        assertEquals("خرج از حقوق", mixedItems[1].purposeCategory)
+        assertEquals(25_000L, mixedItems[1].totalAmountToman)
+        assertEquals(false, mixedItems[1].isIncome)
+        assertNull(
+            PersianVoiceSlangParserEngine.detectSpokenSummaryTotalMismatch(mixedSentence, mixedItems)
+        )
     }
 
     @Test

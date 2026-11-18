@@ -1,9 +1,11 @@
 package com.example.data.local
 
 import android.content.Context
+import androidx.compose.runtime.Immutable
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
+import androidx.room.Ignore
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
@@ -14,6 +16,7 @@ import androidx.room.Update
 import com.example.domain.JalaliCalendarUtils
 import kotlinx.coroutines.flow.Flow
 
+@Immutable
 @Entity(tableName = "transactions")
 data class TransactionEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -37,55 +40,59 @@ data class TransactionEntity(
     val timestampMillis: Long
         get() = timestamp
 
+    @delegate:Ignore
+    private val cachedJalali by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        JalaliCalendarUtils.timestampToJalali(timestamp)
+    }
+
     val jalaliDate: String
-        get() = JalaliCalendarUtils.timestampToJalali(timestamp).dateWithYear
+        get() = cachedJalali.dateWithYear
 
     val jalaliYear: Int
-        get() = JalaliCalendarUtils.timestampToJalali(timestamp).year
+        get() = cachedJalali.year
 
     val jalaliMonth: Int
-        get() = JalaliCalendarUtils.timestampToJalali(timestamp).month
+        get() = cachedJalali.month
 
     val jalaliDay: Int
-        get() = JalaliCalendarUtils.timestampToJalali(timestamp).day
+        get() = cachedJalali.day
 
     val needsVoiceTag: Boolean
         get() = isUntagged
 
-    val subtitle: String
-        get() {
-            val j = JalaliCalendarUtils.timestampToJalali(timestamp)
-            return "${j.dateWithYear} • ${j.timeStr} • $cardInfo"
-        }
+    @delegate:Ignore
+    val subtitle: String by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        "${cachedJalali.dateWithYear} • ${cachedJalali.timeStr} • $cardInfo"
+    }
 
-    val shortBankName: String
-        get() {
-            val candidate = bankName.ifBlank {
-                cardInfo
-                    .replace("کارت", "")
-                    .replace("حساب", "")
-                    .replace(digitsRegex, "")
-                    .trim()
-            }
-            return if (candidate.isBlank() || candidate == "بانک" || candidate == "تراکنش صوتی") {
-                "نقدی / دستی"
-            } else {
-                candidate
-            }
+    @delegate:Ignore
+    val shortBankName: String by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        val candidate = bankName.ifBlank {
+            cardInfo
+                .replace("کارت", "")
+                .replace("حساب", "")
+                .replace(digitsRegex, "")
+                .trim()
         }
+        if (candidate.isBlank() || candidate == "بانک" || candidate == "تراکنش صوتی") {
+            "نقدی / دستی"
+        } else {
+            candidate
+        }
+    }
 
     companion object {
         private val digitsRegex = Regex("[۰-۹0-9]+")
     }
 
-    val simpleSubtitle: String
-        get() {
-            val j = JalaliCalendarUtils.timestampToJalali(timestamp)
-            return "${j.dateWithYear} • ${j.timeStr} • $shortBankName"
-        }
+    @delegate:Ignore
+    val simpleSubtitle: String by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        "${cachedJalali.dateWithYear} • ${cachedJalali.timeStr} • $shortBankName"
+    }
 
-    val displayTitle: String
-        get() = when {
+    @delegate:Ignore
+    val displayTitle: String by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        when {
             !isUntagged && purpose.isNotBlank() &&
                 purpose != "نیازمند تکمیل صوتی" &&
                 purpose != "برداشت کارتی / خرید" &&
@@ -106,8 +113,10 @@ data class TransactionEntity(
             }
             else -> title
         }
+    }
 }
 
+@Immutable
 @Entity(tableName = "bank_accounts")
 data class BankAccountEntity(
     @PrimaryKey val bankName: String, // e.g., "بلو", "سپه", "پاسارگاد", "ملت", "ویپاد"
@@ -119,6 +128,7 @@ data class BankAccountEntity(
     val isManual: Boolean = false
 )
 
+@Immutable
 @Entity(tableName = "commitments")
 data class CommitmentEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -133,6 +143,7 @@ data class CommitmentEntity(
     val timestamp: Long = System.currentTimeMillis()
 )
 
+@Immutable
 @Entity(tableName = "app_settings")
 data class AppSettingsEntity(
     @PrimaryKey val id: Int = 1,

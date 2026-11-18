@@ -137,9 +137,25 @@ object JibemanAssetLogoCache {
         }
     }
 
+    private val resolvedKeyCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    fun peekCachedLogo(logoKey: String?): ImageBitmap? {
+        if (logoKey.isNullOrEmpty()) return null
+        return cachedLogos?.get(logoKey)
+    }
+
     fun resolveBankLogoKey(bankName: String): String? {
         val rawTrimmed = bankName.trim()
         if (rawTrimmed.isBlank()) return null
+        resolvedKeyCache[rawTrimmed]?.let { cached ->
+            return cached.ifEmpty { null }
+        }
+        val computed = computeBankLogoKey(rawTrimmed)
+        resolvedKeyCache[rawTrimmed] = computed ?: ""
+        return computed
+    }
+
+    private fun computeBankLogoKey(rawTrimmed: String): String? {
         if (rawTrimmed.startsWith("ic_bank_")) return rawTrimmed
 
         ALL_38_IRANIAN_BANKS.firstOrNull { (fa, key) ->
@@ -224,8 +240,10 @@ fun BankLogoAvatar(
 ) {
     val context = LocalContext.current
     val logoKey = remember(bankName) { JibemanAssetLogoCache.resolveBankLogoKey(bankName) }
-    val pngBitmap: ImageBitmap? = remember(logoKey, context) {
-        if (logoKey == null) null else JibemanAssetLogoCache.ensureLoaded(context)[logoKey]
+    val pngBitmap: ImageBitmap? = remember(logoKey) {
+        if (logoKey == null) null
+        else JibemanAssetLogoCache.peekCachedLogo(logoKey)
+            ?: JibemanAssetLogoCache.ensureLoaded(context)[logoKey]
     }
 
     if (pngBitmap != null) {

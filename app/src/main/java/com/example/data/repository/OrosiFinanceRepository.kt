@@ -30,6 +30,8 @@ class OrosiFinanceRepository(
     companion object {
         const val PREFS_NAME = "orosi_offline_db_v15_jibeman"
         private val smsSyncMutex = Mutex()
+        @Volatile
+        private var lastCompletedScanEpochMs: Long = 0L
 
         private val demoStoreNames = setOf(
             "شرکت فناوری اُرسی",
@@ -208,34 +210,52 @@ class OrosiFinanceRepository(
         }
 
         // NEVER seed fake demo transactions, fake bank accounts, or fake commitments!
-        cleanupDemoAndDuplicatesIfRealSmsPresent()
+        val hadCleanupChanges = cleanupDemoAndDuplicatesIfRealSmsPresent()
         recalculateRealSafeToSpend()
-        persistSnapshotToSharedPrefs()
+        if (currentSettings == null || hadCleanupChanges) {
+            persistSnapshotToSharedPrefs()
+        }
     }
 
-    private suspend fun cleanupDemoAndDuplicatesIfRealSmsPresent() {
+    private suspend fun cleanupDemoAndDuplicatesIfRealSmsPresent(): Boolean {
+        var changed = false
         val prefs = getPrimaryPrefs()
         val allTxs = dao.getAllTransactionsNow()
 
         // Always purge any bogus, 0-Toman, or demo transactions so the ledger stays 100% clean
-        allTxs.filter { isDemoTransaction(it) }.forEach { demoTx ->
-            dao.deleteTransactionById(demoTx.id)
+        val demoTxs = allTxs.filter { isDemoTransaction(it) }
+        if (demoTxs.isNotEmpty()) {
+            demoTxs.forEach { demoTx ->
+                dao.deleteTransactionById(demoTx.id)
+            }
+            changed = true
         }
-        dao.deleteBankAccount("بانک")
-        dao.deleteBankAccount("تراکنش صوتی")
 
         val allAccounts = dao.getAllBankAccountsNow()
+        if (allAccounts.any { it.bankName == "بانک" }) {
+            dao.deleteBankAccount("بانک")
+            changed = true
+        }
+        if (allAccounts.any { it.bankName == "تراکنش صوتی" }) {
+            dao.deleteBankAccount("تراکنش صوتی")
+            changed = true
+        }
         if (isDemoBankSet(allAccounts)) {
             dao.clearAllBankAccounts()
+            changed = true
         }
 
         val allCommitments = dao.getAllCommitmentsNow()
-        allCommitments.filter { isDemoCommitment(it) }.forEach { demoC ->
-            dao.deleteCommitmentById(demoC.id)
+        val demoComms = allCommitments.filter { isDemoCommitment(it) }
+        if (demoComms.isNotEmpty()) {
+            demoComms.forEach { demoC ->
+                dao.deleteCommitmentById(demoC.id)
+            }
+            changed = true
         }
 
         // Deduplicate any duplicate SMS transactions in Room DB (preferring user-tagged rows)
-        val remainingTxs = dao.getAllTransactionsNow()
+        val remainingTxs = if (changed) dao.getAllTransactionsNow() else allTxs
         val smsGroups = remainingTxs
             .filter { it.rawSmsBody.isNotBlank() }
             .groupBy { tx ->
@@ -249,6 +269,7 @@ class OrosiFinanceRepository(
                 ).first()
                 group.filter { it.id != keeper.id }.forEach { dup ->
                     dao.deleteTransactionById(dup.id)
+                    changed = true
                 }
             }
         }
@@ -264,11 +285,13 @@ class OrosiFinanceRepository(
                     acc.copy(isTankhah = acc.bankName == primaryBankName)
                 }
                 dao.upsertBankAccounts(normalizedList)
+                changed = true
             }
             if (currentAccounts.isNotEmpty()) {
                 prefs?.edit()?.putBoolean("tankhah_default_normalized_v5", true)?.apply()
             }
         }
+        return changed
     }
 
     private suspend fun upsertDiscoveredBankAccount(
@@ -294,13 +317,18 @@ class OrosiFinanceRepository(
             )
         } else if (!existing.isManual) {
             val shouldUpdateBalance = balanceToman != null && smsTimestamp >= existing.lastUpdatedTimestamp
-            dao.upsertBankAccount(
-                existing.copy(
-                    nameEn = bankNameEn.ifBlank { existing.nameEn },
-                    balanceToman = if (shouldUpdateBalance) balanceToman!! else existing.balanceToman,
-                    lastUpdatedTimestamp = maxOf(existing.lastUpdatedTimestamp, smsTimestamp)
+            val newBalance = if (shouldUpdateBalance) balanceToman!! else existing.balanceToman
+            val newNameEn = bankNameEn.ifBlank { existing.nameEn }
+            val newTs = maxOf(existing.lastUpdatedTimestamp, smsTimestamp)
+            if (newBalance != existing.balanceToman || newNameEn != existing.nameEn || newTs != existing.lastUpdatedTimestamp) {
+                dao.upsertBankAccount(
+                    existing.copy(
+                        nameEn = newNameEn,
+                        balanceToman = newBalance,
+                        lastUpdatedTimestamp = newTs
+                    )
                 )
-            )
+            }
         }
     }
 
@@ -331,7 +359,8 @@ class OrosiFinanceRepository(
             val obj = JSONObject(rawJson)
             val existingObj = obj.optJSONObject(bankKey)
             val prevTimestamp = existingObj?.optLong("ts", 0L) ?: 0L
-            if (smsTimestamp >= prevTimestamp) {
+            val prevBalance = existingObj?.optLong("balanceToman", -1L) ?: -1L
+            if (smsTimestamp > prevTimestamp || (smsTimestamp == prevTimestamp && balanceToman != prevBalance)) {
                 val entry = JSONObject().apply {
                     put("balanceToman", balanceToman)
                     put("ts", smsTimestamp)
@@ -347,6 +376,7 @@ class OrosiFinanceRepository(
      * Dynamically recalculates `monthlyBalanceToman` and `dailySafeBudgetToman`
      * from the user's actual bank accounts in Room (either all accounts or only Tankhah accounts),
      * minus unpaid commitments of this month.
+     * Only writes to Room if values actually changed, preventing spurious UI recompositions during scroll.
      */
     suspend fun recalculateRealSafeToSpend() {
         val currentSettings = dao.getSettingsNow() ?: AppSettingsEntity()
@@ -390,13 +420,18 @@ class OrosiFinanceRepository(
         }
 
         val roundedDailySafe = PersianNumberUtils.roundDownToCleanThousands(rawDailySafe)
+        val newMonthlyBalance = totalAllAccountsSum.coerceAtLeast(rawAccountBalanceToman)
 
-        dao.saveSettings(
-            currentSettings.copy(
-                monthlyBalanceToman = totalAllAccountsSum.coerceAtLeast(rawAccountBalanceToman),
-                dailySafeBudgetToman = roundedDailySafe
+        if (currentSettings.monthlyBalanceToman != newMonthlyBalance ||
+            currentSettings.dailySafeBudgetToman != roundedDailySafe
+        ) {
+            dao.saveSettings(
+                currentSettings.copy(
+                    monthlyBalanceToman = newMonthlyBalance,
+                    dailySafeBudgetToman = roundedDailySafe
+                )
             )
-        )
+        }
     }
 
     /**
@@ -503,9 +538,14 @@ class OrosiFinanceRepository(
      */
     suspend fun scanDeviceSmsInboxLast30Days(
         context: Context,
-        daysBack: Int = 3650
+        daysBack: Int = 3650,
+        force: Boolean = false
     ): Int = withContext(Dispatchers.IO) {
         smsSyncMutex.withLock {
+            val nowMs = System.currentTimeMillis()
+            if (!force && (nowMs - lastCompletedScanEpochMs) < 3_500L) {
+                return@withLock 0
+            }
             loadCustomSendersFromPrefs()
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val hadRealSmsBefore = prefs.getBoolean("has_real_bank_sms", false)
@@ -533,6 +573,7 @@ class OrosiFinanceRepository(
 
             val importedKeys = prefs.getStringSet("jibeman_dedup_keys", emptySet())?.toMutableSet()
                 ?: mutableSetOf()
+            val initialImportedKeyCount = importedKeys.size
 
             val existingRoomFingerprints = if (cleanLedgerV15Done) {
                 existingAllTxs
@@ -542,9 +583,15 @@ class OrosiFinanceRepository(
                 mutableSetOf()
             }
 
+            val canFastSkipImported = cleanLedgerV15Done &&
+                existingAccountsBeforeScan.isNotEmpty() &&
+                existingRoomFingerprints.isNotEmpty() &&
+                !force
+
             var importedCount = 0
             var foundAnyRealBankSms = false
             var wipedForV15Rebuild = false
+            var anyAccountChanged = false
 
             data class DiscoveredBankState(
                 val nameFa: String,
@@ -561,10 +608,12 @@ class OrosiFinanceRepository(
 
             suspend fun flushDiscoveredAccountsToRoom() {
                 if (!foundAnyRealBankSms) return
-                prefs.edit()
-                    .putBoolean("has_real_bank_sms", true)
-                    .putBoolean("jibeman_clean_ledger_v15", true)
-                    .apply()
+                if (!hadRealSmsBefore || !cleanLedgerV15Done) {
+                    prefs.edit()
+                        .putBoolean("has_real_bank_sms", true)
+                        .putBoolean("jibeman_clean_ledger_v15", true)
+                        .apply()
+                }
 
                 val existingAccountsByName = dao.getAllBankAccountsNow().associateBy { it.bankName }
                 val primaryDefaultBank = if (discoveredBanks.containsKey("بلو")) {
@@ -572,7 +621,8 @@ class OrosiFinanceRepository(
                 } else {
                     discoveredBanks.keys.firstOrNull().orEmpty()
                 }
-                val updatedAccounts = discoveredBanks.values.map { st ->
+                val changedAccountsToUpsert = mutableListOf<BankAccountEntity>()
+                for (st in discoveredBanks.values) {
                     val prev = existingAccountsByName[st.nameFa]
                     val resolvedTankhah = savedTankhahPrefs[st.nameFa]
                         ?: prev?.isTankhah
@@ -580,20 +630,30 @@ class OrosiFinanceRepository(
                     if (st.latestBalanceToman != null && st.latestBalanceToman!! >= 0L) {
                         saveExtractedCardBalance(st.nameFa, st.latestBalanceToman!!, st.latestBalanceTimestamp)
                     }
-                    BankAccountEntity(
+                    val resolvedBalance = st.latestBalanceToman ?: prev?.balanceToman ?: 0L
+                    val resolvedTs = maxOf(st.latestBalanceTimestamp, st.latestSeenTimestamp, prev?.lastUpdatedTimestamp ?: 0L)
+                    val candidate = BankAccountEntity(
                         bankName = st.nameFa,
                         nameEn = st.nameEn,
-                        balanceToman = st.latestBalanceToman ?: prev?.balanceToman ?: 0L,
+                        balanceToman = resolvedBalance,
                         isTankhah = resolvedTankhah,
                         cardLast4 = prev?.cardLast4 ?: "",
-                        lastUpdatedTimestamp = maxOf(st.latestBalanceTimestamp, st.latestSeenTimestamp),
+                        lastUpdatedTimestamp = resolvedTs,
                         isManual = prev?.isManual ?: false
                     )
+                    if (prev == null ||
+                        prev.balanceToman != candidate.balanceToman ||
+                        prev.isTankhah != candidate.isTankhah ||
+                        prev.nameEn != candidate.nameEn
+                    ) {
+                        changedAccountsToUpsert.add(candidate)
+                    }
                 }
-                if (updatedAccounts.isNotEmpty()) {
-                    dao.upsertBankAccounts(updatedAccounts)
+                if (changedAccountsToUpsert.isNotEmpty()) {
+                    dao.upsertBankAccounts(changedAccountsToUpsert)
+                    anyAccountChanged = true
+                    recalculateRealSafeToSpend()
                 }
-                recalculateRealSafeToSpend()
             }
 
             try {
@@ -630,8 +690,10 @@ class OrosiFinanceRepository(
                         val senderAddress = if (addrIdx >= 0) c.getString(addrIdx).orEmpty().trim() else ""
                         if (senderAddress.isBlank()) {
                             if (scannedMessages == 250 && !phase1Flushed) {
-                                if (phase1Batch.isNotEmpty()) dao.insertAllTransactions(phase1Batch)
-                                flushDiscoveredAccountsToRoom()
+                                if (phase1Batch.isNotEmpty()) {
+                                    dao.insertAllTransactions(phase1Batch)
+                                    flushDiscoveredAccountsToRoom()
+                                }
                                 phase1Flushed = true
                             }
                             continue
@@ -641,8 +703,10 @@ class OrosiFinanceRepository(
                         val bankProfile = JibemanSmsEngine.resolveBank(senderAddress)
                         if (bankProfile == null) {
                             if (scannedMessages == 250 && !phase1Flushed) {
-                                if (phase1Batch.isNotEmpty()) dao.insertAllTransactions(phase1Batch)
-                                flushDiscoveredAccountsToRoom()
+                                if (phase1Batch.isNotEmpty()) {
+                                    dao.insertAllTransactions(phase1Batch)
+                                    flushDiscoveredAccountsToRoom()
+                                }
                                 phase1Flushed = true
                             }
                             continue
@@ -651,12 +715,29 @@ class OrosiFinanceRepository(
                         val body = if (bodyIdx >= 0) c.getString(bodyIdx).orEmpty().trim() else ""
                         if (body.isBlank()) continue
 
+                        val timestampMillis = if (dateIdx >= 0) c.getLong(dateIdx) else System.currentTimeMillis()
+                        val uniqueDedupKey = JibemanSmsEngine.dedupKey(senderAddress, timestampMillis, body)
+
+                        // Fast path for silent background syncs: skip full regex parsing if this SMS is already imported
+                        if (canFastSkipImported && importedKeys.contains(uniqueDedupKey)) {
+                            if (scannedMessages == 250 && !phase1Flushed) {
+                                if (phase1Batch.isNotEmpty()) {
+                                    dao.insertAllTransactions(phase1Batch)
+                                    flushDiscoveredAccountsToRoom()
+                                }
+                                phase1Flushed = true
+                            }
+                            continue
+                        }
+
                         // Step 2: Parse SMS body via JibemanSmsEngine BEFORE registering any bank account!
                         val parsed = JibemanSmsEngine.parse(body)
                         if (parsed == null) {
                             if (scannedMessages == 250 && !phase1Flushed) {
-                                if (phase1Batch.isNotEmpty()) dao.insertAllTransactions(phase1Batch)
-                                flushDiscoveredAccountsToRoom()
+                                if (phase1Batch.isNotEmpty()) {
+                                    dao.insertAllTransactions(phase1Batch)
+                                    flushDiscoveredAccountsToRoom()
+                                }
                                 phase1Flushed = true
                             }
                             continue
@@ -667,7 +748,6 @@ class OrosiFinanceRepository(
                         if (amountToman <= 0L) continue
                         val balanceToman = parsed.balance?.div(10L)
 
-                        val timestampMillis = if (dateIdx >= 0) c.getLong(dateIdx) else System.currentTimeMillis()
                         val bankName = bankProfile.nameFa
                         foundAnyRealBankSms = true
 
@@ -702,7 +782,6 @@ class OrosiFinanceRepository(
                         val isDeposit = (parsed.direction == "in")
 
                         // Step 5: Exact Jibeman SHA-256 deduplication key
-                        val uniqueDedupKey = JibemanSmsEngine.dedupKey(senderAddress, timestampMillis, body)
                         val roomFingerprint = "$bankName|$amountToman|$timestampMillis|${body.trim().hashCode()}"
 
                         if (!importedKeys.contains(uniqueDedupKey) && !existingRoomFingerprints.contains(roomFingerprint)) {
@@ -772,9 +851,14 @@ class OrosiFinanceRepository(
             // Guarantee bank accounts are never left empty if transactions exist in Room
             rebuildBankAccountsFromTransactionsIfEmpty(savedTankhahPrefs)
 
-            prefs.edit().putStringSet("jibeman_dedup_keys", importedKeys).apply()
-            recalculateRealSafeToSpend()
-            persistSnapshotToSharedPrefs()
+            if (importedKeys.size != initialImportedKeyCount || !cleanLedgerV15Done) {
+                prefs.edit().putStringSet("jibeman_dedup_keys", importedKeys).apply()
+            }
+            if (importedCount > 0 || anyAccountChanged || wipedForV15Rebuild) {
+                recalculateRealSafeToSpend()
+                persistSnapshotToSharedPrefs()
+            }
+            lastCompletedScanEpochMs = System.currentTimeMillis()
             importedCount
         }
     }
@@ -848,8 +932,9 @@ class OrosiFinanceRepository(
             dao.getAllCommitmentsNow().filter { isDemoCommitment(it) }.forEach { demoC ->
                 dao.deleteCommitmentById(demoC.id)
             }
+            lastCompletedScanEpochMs = 0L
         }
-        val count = scanDeviceSmsInboxLast30Days(context, daysBack = 3650)
+        val count = scanDeviceSmsInboxLast30Days(context, daysBack = 3650, force = true)
         smsSyncMutex.withLock {
             rebuildBankAccountsFromTransactionsIfEmpty(priorTankhahPrefs)
             if (dao.getAllTransactionsNow().isEmpty() && dao.getAllBankAccountsNow().isEmpty()) {

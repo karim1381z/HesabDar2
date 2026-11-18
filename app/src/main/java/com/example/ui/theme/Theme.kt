@@ -1,6 +1,7 @@
 package com.example.ui.theme
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -51,8 +52,11 @@ fun MyApplicationTheme(
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         MaterialTheme(
             colorScheme = OrosiDarkColorScheme,
-            typography = activeTypography,
-            content = content
-        )
+            typography = activeTypography
+        ) {
+            ProvideTextStyle(value = activeTypography.bodyLarge) {
+                content()
+            }
+        }
     }
 }

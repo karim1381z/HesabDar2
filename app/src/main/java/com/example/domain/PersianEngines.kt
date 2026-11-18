@@ -1524,13 +1524,29 @@ object PersianVoiceSlangParserEngine {
     }
 
     private val incomeSpeechRegex = Regex(
-        """(?<=^|\s)(?:دریافت\s+کردم|دریافت\s+شد|دریافتی|دریافت\s+وجه|واریز\s+شد|واریزی|واریز\s+به\s+حساب|واریز\s+حقوق|(?:حقوق|پاداش|عیدی|سود|هدیه|جایزه|کارانه|پورسانت)(?:\s+[^\s]+){0,2}\s+گرفتم|فروختم|بهم\s+داد|به\s+من\s+داد|به\s+حسابم\s+اومد|به\s+حسابم\s+آمد|به\s+حسابم\s+نشست|به\s+کارتم\s+ریخت|به\s+کارتم\s+زد|درآمد|طلبم\s+رو\s+داد|طلبم\s+را\s+داد|قرضم\s+رو\s+پس\s+داد|پس\s+گرفتم)(?=\s|$)|(?<=^|\s)(?:دریافت|واریز)$"""
+        """(?<=^|\s)(?:دریافت\s+کردم|دریافت\s+شد|دریافتی|دریافت\s+وجه|واریز\s+شد|واریزی|واریز\s+به\s+حساب|واریز\s+حقوق|(?:حقوق|حقوقم|پاداش|پاداشم|عیدی|سود|هدیه|جایزه|کارانه|پورسانت|یارانه|یارانه‌ام)(?:\s+[^\s]+){0,2}\s+(?:گرفتم|ریختن|ریختند|واریز\s+شد|اومد|آمد|نشست)|فروختم|بهم\s+داد|به\s+من\s+داد|به\s+حسابم\s+اومد|به\s+حسابم\s+آمد|به\s+حسابم\s+نشست|به\s+کارتم\s+ریخت|به\s+کارتم\s+زد|درآمدم|درآمد|طلبم\s+رو\s+داد|طلبم\s+را\s+داد|قرضم\s+رو\s+پس\s+داد|پس\s+گرفتم)(?=\s|$)|(?<=^|\s)(?:دریافت|واریز)$"""
+    )
+
+    private val nominalIncomeSubjectRegex = Regex(
+        """(?<!از\s)(?<=^|\s)(?:حقوقم|حقوق\s+من|حقوق|یارانه‌ام|یارانه\s+من|یارانه|پاداشم|پاداش\s+من|پاداش|عیدیم|عیدی\s+من|عیدی|کارانه‌ام|کارانه|پورسانت|درآمدم|درآمد\s+من|سود\s+بانکی|سود\s+سپرده)(?=\s|$)"""
+    )
+
+    private val expenseVerbOrMarkerRegex = Regex(
+        """(?<=^|\s)(?:خرج\s+کردم|خرجش\s+کردم|خرج\s+کرد|خرج\s+شد|خرج|پرداخت\s+کردم|پرداخت|خریدم|خرید\s+کردم|بخرم|کارت\s+کشیدم|پول\s+دادم|دادم|بدم|هزینه|قسط|اجاره|قبض)(?=\s|$)"""
     )
 
     fun detectVoiceTransactionIsIncome(rawSpeech: String): Boolean {
         val norm = PersianNumberUtils.normalizePersianText(rawSpeech.trim())
         if (norm.isBlank()) return false
-        return incomeSpeechRegex.containsMatchIn(norm)
+        if (incomeSpeechRegex.containsMatchIn(norm)) return true
+        if (nominalIncomeSubjectRegex.containsMatchIn(norm) &&
+            !expenseVerbOrMarkerRegex.containsMatchIn(norm) &&
+            !norm.contains("از حقوق") &&
+            !norm.contains("از یارانه")
+        ) {
+            return true
+        }
+        return false
     }
 
     fun inferExpenseCategory(title: String, isIncome: Boolean = false): String {
@@ -2151,6 +2167,7 @@ object PersianVoiceSlangParserEngine {
         fallbackTotalToman: Long?
     ): List<ParsedVoiceExpense> {
         if (items.size < 2) return items
+        if (items.any { it.isIncome } && items.any { !it.isIncome }) return items
 
         val canDemoteToSubThousand = items.mapIndexed { idx, item ->
             val clause = clauses.getOrNull(idx).orEmpty()
@@ -2206,6 +2223,7 @@ object PersianVoiceSlangParserEngine {
         for (item in items) {
             val prev = collapsed.lastOrNull()
             if (prev != null &&
+                prev.isIncome == item.isIncome &&
                 prev.purposeCategory.isNotBlank() &&
                 normalizeComparableNoun(prev.purposeCategory) == normalizeComparableNoun(item.purposeCategory)
             ) {
@@ -2219,6 +2237,10 @@ object PersianVoiceSlangParserEngine {
 
     private val summaryHeaderRegex = Regex(
         """(?<=^|\s)(?:کلاً|کلا|جمعاً|جمعا|مجموعاً|مجموعا|سرجمع|خرج\s+کردم|خرید\s+کردم|پول\s+دادم|کارت\s+کشیدم|پرداخت\s+کردم)(?=\s|$)"""
+    )
+
+    private val partitiveSpendBackRefRegex = Regex(
+        """(?<=^|\s)(?:تومانش|تومنش|هزارش|ریالش|ازش)(?=\s|$)"""
     )
 
     /**
@@ -2264,6 +2286,7 @@ object PersianVoiceSlangParserEngine {
             parseMultiVoiceCommands(rawSpeech)
         }
         if (items.size < 2) return null
+        if (items.any { it.isIncome } && items.any { !it.isIncome }) return null
         val itemsSum = items.sumOf { it.totalAmountToman }
         return if (itemsSum > 0L && itemsSum != statedSummaryHeader) statedSummaryHeader else null
     }
@@ -2435,13 +2458,24 @@ object PersianVoiceSlangParserEngine {
             val currentParsed = parseSingleVoiceClause(currentClause, null, defaultBankName)
             val nextParsed = parseSingleVoiceClause(nextPart, null, defaultBankName)
             val nextAmount = nextParsed.totalAmountToman
+            val hasExpenseVerbInNext = expenseVerbOrMarkerRegex.containsMatchIn(nextPart)
 
-            // If nextPart has a new amount but NO noun (e.g. "... ولی ۱۰۰ تومنی خریدم"), it overrides the price of currentClause!
+            // If currentParsed is an INCOME clause and nextPart is an EXPENSE clause (e.g. "حقوق من ۵۰ هزار تومان بود و ۲۵ هزار تومانش رو خرج کردم"),
+            // keep them as separate clauses with independent transaction directions!
             if (currentParsed.totalAmountToman > 0L &&
+                currentParsed.isIncome &&
+                !nextParsed.isIncome &&
+                nextAmount > 0L &&
+                (nextParsed.purposeCategory.isNotBlank() || hasExpenseVerbInNext)
+            ) {
+                mergedClauses.add(currentClause)
+                currentClause = nextPart
+            } else if (currentParsed.totalAmountToman > 0L &&
                 currentParsed.purposeCategory.isNotBlank() &&
                 nextAmount > 0L &&
                 nextParsed.purposeCategory.isBlank()
             ) {
+                // If nextPart has a new amount but NO noun (e.g. "... ولی ۱۰۰ تومنی خریدم"), it overrides the price of currentClause!
                 currentClause = "${currentParsed.purposeCategory} $nextPart"
             } else if (currentParsed.totalAmountToman > 0L &&
                 currentParsed.purposeCategory.isNotBlank() &&
@@ -2458,8 +2492,25 @@ object PersianVoiceSlangParserEngine {
         if (mergedClauses.size >= 2) {
             val validClauses = mutableListOf<String>()
             val parsedItems = mutableListOf<ParsedVoiceExpense>()
+            var lastIncomeTitle = ""
             for (clause in mergedClauses) {
-                val parsed = parseSingleVoiceClause(clause, null, defaultBankName)
+                var parsed = parseSingleVoiceClause(clause, null, defaultBankName)
+                if (parsed.isIncome && parsed.totalAmountToman > 0L && parsed.purposeCategory.isNotBlank()) {
+                    lastIncomeTitle = parsed.purposeCategory
+                } else if (!parsed.isIncome && parsed.totalAmountToman > 0L &&
+                    (parsed.purposeCategory.isBlank() || parsed.purposeCategory == "خرج کرد") &&
+                    expenseVerbOrMarkerRegex.containsMatchIn(clause)
+                ) {
+                    val enrichedTitle = if (lastIncomeTitle.isNotBlank() &&
+                        lastIncomeTitle != "دریافت وجه" &&
+                        lastIncomeTitle != "واریز وجه"
+                    ) {
+                        "خرج از $lastIncomeTitle"
+                    } else {
+                        "خرج کرد"
+                    }
+                    parsed = parsed.copy(purposeCategory = enrichedTitle)
+                }
                 if (parsed.totalAmountToman > 0L && parsed.purposeCategory.isNotBlank()) {
                     validClauses.add(clause)
                     parsedItems.add(parsed)
@@ -2510,6 +2561,7 @@ object PersianVoiceSlangParserEngine {
             } else {
                 val sumAmount = multiItems.sumOf { it.totalAmountToman }
                 val combinedNote = formatCombinedMultiVoiceNote(multiItems)
+                val allIncome = multiItems.all { it.isIncome }
                 val anyIncome = detectedIncome || multiItems.any { it.isIncome }
                 return ParsedVoiceExpense(
                     recognizedSpeech = cleaned,
@@ -2522,7 +2574,7 @@ object PersianVoiceSlangParserEngine {
                     cardLabel = "نقدی / دستی",
                     category = if (anyIncome) "درآمد و واریزی" else multiItems.first().category,
                     merchant = multiItems.first().merchant,
-                    isIncome = anyIncome
+                    isIncome = allIncome
                 )
             }
         }
@@ -2705,13 +2757,28 @@ object PersianVoiceSlangParserEngine {
             }
         }
 
-        val cleanedPurpose = trimLeadingPrepositionsAndVav(rawPurposeCategory)
+        val rawCleanedPurpose = trimLeadingPrepositionsAndVav(rawPurposeCategory)
+        val cleanedPurpose = when (rawCleanedPurpose) {
+            "حقوقم", "حقوق من" -> "حقوق"
+            "یارانه‌ام", "یارانه من" -> "یارانه"
+            "پاداشم", "پاداش من" -> "پاداش"
+            "عیدیم", "عیدی من" -> "عیدی"
+            "درآمدم", "درآمد من" -> "درآمد"
+            "کارانه‌ام", "کارانه من" -> "کارانه"
+            else -> rawCleanedPurpose
+        }
         val purposeCategory = if (isIncomeClause) {
             when (cleanedPurpose) {
                 "", "دریافت", "دریافتی" -> if (rawSpeech.contains("واریز")) "واریز وجه" else "دریافت وجه"
                 "واریز", "واریزی" -> "واریز وجه"
                 else -> cleanedPurpose
             }
+        } else if (cleanedPurpose.isBlank() &&
+            totalToman > 0L &&
+            partitiveSpendBackRefRegex.containsMatchIn(cleaned) &&
+            expenseVerbOrMarkerRegex.containsMatchIn(cleaned)
+        ) {
+            "خرج کرد"
         } else {
             cleanedPurpose
         }

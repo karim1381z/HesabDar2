@@ -85,6 +85,12 @@ fun buildOrosiTypography(fontFamilyKey: String = "IRANSANSX"): Typography {
             fontSize = 30.sp,
             lineHeight = 38.sp
         ),
+        displaySmall = TextStyle(
+            fontFamily = activeFamily,
+            fontWeight = FontWeight.ExtraBold,
+            fontSize = 26.sp,
+            lineHeight = 34.sp
+        ),
         headlineLarge = TextStyle(
             fontFamily = activeFamily,
             fontWeight = FontWeight.ExtraBold,
@@ -96,6 +102,12 @@ fun buildOrosiTypography(fontFamilyKey: String = "IRANSANSX"): Typography {
             fontWeight = FontWeight.Bold,
             fontSize = 22.sp,
             lineHeight = 30.sp
+        ),
+        headlineSmall = TextStyle(
+            fontFamily = activeFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 19.sp,
+            lineHeight = 27.sp
         ),
         titleLarge = TextStyle(
             fontFamily = activeFamily,

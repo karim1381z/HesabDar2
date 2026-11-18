@@ -105,6 +105,9 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
     private val _statusBannerMessage = MutableStateFlow<String?>(null)
 
     init {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            com.example.ui.components.JibemanAssetLogoCache.ensureLoaded(appContext)
+        }
         viewModelScope.launch {
             try {
                 repository.ensureSeeded()
@@ -129,7 +132,7 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             val newestTxKey = allTxs.maxByOrNull { it.timestamp }?.let {
                 JalaliCalendarUtils.fromTimestamp(it.timestamp).yearMonthKey
             } ?: nowKey
-            _selectedYearMonthKey.value = newestTxKey
+            _selectedYearMonthKey.value = newestTxKey.coerceAtMost(nowKey)
         }
     }
 
@@ -218,8 +221,10 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun changeSelectedMonth(deltaMonths: Int) {
-        hasUserChangedMonthManually = true
+        val currentYearMonthKey = JalaliCalendarUtils.fromTimestamp(System.currentTimeMillis()).yearMonthKey
         val current = _selectedYearMonthKey.value
+        if (deltaMonths > 0 && current >= currentYearMonthKey) return
+        hasUserChangedMonthManually = true
         var year = current / 100
         var month = (current % 100) + deltaMonths
         while (month < 1) {
@@ -230,7 +235,12 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             month -= 12
             year += 1
         }
-        _selectedYearMonthKey.value = year * 100 + month
+        val candidateKey = year * 100 + month
+        _selectedYearMonthKey.value = if (deltaMonths > 0) {
+            candidateKey.coerceAtMost(currentYearMonthKey)
+        } else {
+            candidateKey
+        }
     }
 
     fun toggleHideAmounts() {
@@ -473,18 +483,22 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
     fun onVoiceTransactionTypeChanged(isIncome: Boolean) {
         val current = _voiceState.value
         val updatedMulti = current.parsedMultiItems.map { it.copy(isIncome = isIncome) }
-        val updatedPurpose = when {
-            isIncome && (current.purposeCategory.isBlank() || current.purposeCategory == "دریافت" || current.purposeCategory == "واریز") ->
-                if (current.recognizedText.contains("واریز")) "واریز وجه" else "دریافت وجه"
-            !isIncome && (current.purposeCategory == "دریافت وجه" || current.purposeCategory == "واریز وجه") ->
-                ""
-            else -> current.purposeCategory
-        }
         _voiceState.value = current.copy(
             isIncome = isIncome,
             hasUserOverriddenIncomeType = true,
-            purposeCategory = updatedPurpose,
             parsedMultiItems = updatedMulti
+        )
+    }
+
+    fun onToggleMultiVoiceItemType(index: Int) {
+        val currentList = _voiceState.value.parsedMultiItems.toMutableList()
+        if (index !in currentList.indices) return
+        val existingItem = currentList[index]
+        currentList[index] = existingItem.copy(isIncome = !existingItem.isIncome)
+        val combinedNote = PersianVoiceSlangParserEngine.formatCombinedMultiVoiceNote(currentList)
+        _voiceState.value = _voiceState.value.copy(
+            parsedMultiItems = currentList,
+            purposeCategory = combinedNote
         )
     }
 
@@ -580,14 +594,25 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             null
         }
 
+        val hasMixedDirections = multiItems.size > 1 &&
+            multiItems.any { it.isIncome } &&
+            multiItems.any { !it.isIncome }
+
+        val keepUserOverride = _voiceState.value.hasUserOverriddenIncomeType && !hasMixedDirections
+
         val resolvedIsIncome = when {
             targetTx != null -> targetTx.type == "INCOME"
-            _voiceState.value.hasUserOverriddenIncomeType -> _voiceState.value.isIncome
+            keepUserOverride -> _voiceState.value.isIncome
             else -> parsed.isIncome
         }
 
         val effectiveMultiItems = if (multiItems.size > 1) {
-            multiItems.map { it.copy(isIncome = resolvedIsIncome) }
+            when {
+                targetTx != null -> multiItems.map { it.copy(isIncome = targetTx.type == "INCOME") }
+                hasMixedDirections -> multiItems
+                keepUserOverride -> multiItems.map { it.copy(isIncome = resolvedIsIncome) }
+                else -> multiItems
+            }
         } else {
             emptyList()
         }
@@ -607,6 +632,7 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             hasBankAmountMismatch = mismatchAmount != null,
             conflictingSpokenAmountToman = mismatchAmount ?: 0L,
             isIncome = resolvedIsIncome,
+            hasUserOverriddenIncomeType = keepUserOverride,
             hasSummaryTotalMismatch = summaryMismatchAmount != null,
             statedSummaryHeaderToman = summaryMismatchAmount ?: 0L
         )
@@ -648,17 +674,22 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
-            // Check if user has multi-clause items (including any inline edits made in the Voice Sheet)
+            // Check if user has multi-clause items (including any inline edits or mixed income/expense items)
             val activeMultiItems = if (v.parsedMultiItems.size > 1) {
                 v.parsedMultiItems
                     .filter { it.totalAmountToman > 0L && it.purposeCategory.isNotBlank() }
-                    .map { it.copy(isIncome = v.isIncome) }
             } else {
-                PersianVoiceSlangParserEngine.parseMultiVoiceCommands(
+                val rawMulti = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(
                     rawSpeech = v.recognizedText,
                     defaultBankName = targetTx?.shortBankName ?: "نقدی / دستی",
                     fallbackTotalToman = targetTx?.totalAmountToman
-                ).map { it.copy(isIncome = v.isIncome) }
+                )
+                val hasMixed = rawMulti.size > 1 && rawMulti.any { it.isIncome } && rawMulti.any { !it.isIncome }
+                if (hasMixed) {
+                    rawMulti
+                } else {
+                    rawMulti.map { it.copy(isIncome = v.isIncome) }
+                }
             }
 
             if (targetTx == null && activeMultiItems.size > 1) {

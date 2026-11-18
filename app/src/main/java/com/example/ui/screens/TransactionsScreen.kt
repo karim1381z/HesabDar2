@@ -88,6 +88,10 @@ fun TransactionsScreen(
 ) {
     BackHandler(onBack = onBackToHome)
 
+    val currentYearMonthKey = remember {
+        JalaliCalendarUtils.fromTimestamp(System.currentTimeMillis()).yearMonthKey
+    }
+    val canGoNextMonth = selectedYearMonthKey < currentYearMonthKey
     val selectedYear = selectedYearMonthKey / 100
     val selectedMonth = (selectedYearMonthKey % 100).coerceIn(1, 12)
     val monthName = jalaliMonthNames[selectedMonth - 1]
@@ -99,10 +103,9 @@ fun TransactionsScreen(
     val filteredTransactions = remember(transactions, selectedYear, selectedMonth) {
         transactions
             .filter { tx ->
-                val jalali = JalaliCalendarUtils.timestampToJalali(tx.timestampMillis)
                 tx.totalAmountToman > 0L &&
-                    jalali.year == selectedYear &&
-                    jalali.month == selectedMonth
+                    tx.jalaliYear == selectedYear &&
+                    tx.jalaliMonth == selectedMonth
             }
             .sortedWith(
                 compareByDescending<TransactionEntity> { it.timestampMillis }
@@ -127,8 +130,8 @@ fun TransactionsScreen(
                     compareByDescending<TransactionEntity> { it.timestampMillis }
                         .thenByDescending { it.id }
                 )
-                val firstJalali = JalaliCalendarUtils.timestampToJalali(sortedDayTxs.first().timestampMillis)
-                val sortKey = firstJalali.year * 10000 + firstJalali.month * 100 + firstJalali.day
+                val firstTx = sortedDayTxs.first()
+                val sortKey = firstTx.jalaliYear * 10000 + firstTx.jalaliMonth * 100 + firstTx.jalaliDay
                 val netSum = sortedDayTxs.sumOf { tx ->
                     if (tx.type == "INCOME") tx.totalAmountToman else -tx.totalAmountToman
                 }
@@ -149,7 +152,7 @@ fun TransactionsScreen(
         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // 1. Month Selector Header: BOTH right (>) and left (<) circular surface buttons are always enabled and clearly visible
+        // 1. Month Selector Header: right (>) goes to previous month, left (<) goes to next month (disabled on current month)
         item {
             Row(
                 modifier = Modifier
@@ -162,7 +165,7 @@ fun TransactionsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // RIGHT side button in RTL: points RIGHT (>)
+                // RIGHT side button in RTL: points RIGHT (>) -> Previous month
                 Surface(
                     shape = CircleShape,
                     color = OrosiSurfaceContainer,
@@ -191,16 +194,21 @@ fun TransactionsScreen(
                     modifier = Modifier.testTag("selected_month_label")
                 )
 
-                // LEFT side button in RTL: points LEFT (<), always enabled & visible
+                // LEFT side button in RTL: points LEFT (<) -> Next month (disabled & dimmed when on current month)
                 Surface(
                     shape = CircleShape,
-                    color = OrosiSurfaceContainer,
+                    color = if (canGoNextMonth) OrosiSurfaceContainer else OrosiSurfaceContainer.copy(alpha = 0.38f),
                     modifier = Modifier
                         .size(40.dp)
-                        .border(1.dp, PersianLapisLight.copy(alpha = 0.35f), CircleShape)
+                        .border(
+                            1.dp,
+                            if (canGoNextMonth) PersianLapisLight.copy(alpha = 0.35f) else OrosiHairline.copy(alpha = 0.35f),
+                            CircleShape
+                        )
                 ) {
                     IconButton(
-                        onClick = { onChangeMonth(1) },
+                        onClick = { if (canGoNextMonth) onChangeMonth(1) },
+                        enabled = canGoNextMonth,
                         modifier = Modifier
                             .fillMaxSize()
                             .testTag("next_month_button")
@@ -208,7 +216,7 @@ fun TransactionsScreen(
                         Icon(
                             imageVector = Icons.Default.ChevronLeft,
                             contentDescription = "ماه بعد",
-                            tint = AlabasterSilk
+                            tint = if (canGoNextMonth) AlabasterSilk else OrosiOnSurfaceVariant.copy(alpha = 0.3f)
                         )
                     }
                 }
