@@ -1112,12 +1112,17 @@ fun CalmTransactionCard(
     val shortBank = transaction.shortBankName
     val rowTitle = remember(
         transaction.isUntagged,
+        transaction.type,
         transaction.title,
         transaction.displayTitle,
         shortBank
     ) {
         if (transaction.isUntagged) {
-            "خرید کارتی ($shortBank)"
+            if (transaction.type == "INCOME") {
+                "واریز به کارت ($shortBank)"
+            } else {
+                "خرید کارتی ($shortBank)"
+            }
         } else {
             transaction.title.ifBlank { transaction.displayTitle }
         }

@@ -543,6 +543,36 @@ object JibemanSmsEngine : BankSmsParser {
     }
 
     private val customSenderToProfile = java.util.concurrent.ConcurrentHashMap<String, BankProfile>()
+    private val resolveBankCache = java.util.concurrent.ConcurrentHashMap<String, Any>()
+    private val NO_BANK_SENTINEL = Any()
+
+    private val normalizedExactBankMap: Map<String, BankProfile> by lazy {
+        val map = HashMap<String, BankProfile>(512)
+        for (profile in BANK_PROFILES) {
+            for (candidateRaw in profile.senderIds) {
+                if (hasUssdMark(candidateRaw)) continue
+                val norm = normalizeSender(candidateRaw)
+                if (norm.isNotEmpty()) {
+                    map.putIfAbsent(norm, profile)
+                }
+            }
+        }
+        map
+    }
+
+    private val normalizedNumericCandidates: List<Pair<String, BankProfile>> by lazy {
+        val list = ArrayList<Pair<String, BankProfile>>(256)
+        for (profile in BANK_PROFILES) {
+            for (candidateRaw in profile.senderIds) {
+                if (hasUssdMark(candidateRaw)) continue
+                val norm = normalizeSender(candidateRaw)
+                if (norm.length >= 5 && norm.all { it.isDigit() }) {
+                    list.add(norm to profile)
+                }
+            }
+        }
+        list
+    }
 
     fun unregisterCustomSender(senderAddress: String) {
         val cleanSender = senderAddress.trim()
@@ -553,6 +583,7 @@ object JibemanSmsEngine : BankSmsParser {
         if (norm.isNotEmpty()) {
             customSenderToProfile.remove(norm)
         }
+        resolveBankCache.clear()
     }
 
     fun isKnownBankName(bankNameFa: String): Boolean {
@@ -584,6 +615,7 @@ object JibemanSmsEngine : BankSmsParser {
         if (norm.isNotEmpty()) {
             customSenderToProfile[norm] = profile
         }
+        resolveBankCache.clear()
     }
 
     fun findByNumber(sender: String): BankProfile? =
@@ -593,21 +625,30 @@ object JibemanSmsEngine : BankSmsParser {
             ?: lowercaseNumberToProfile[sender.trim().lowercase(Locale.ROOT)]
 
     fun resolveBank(sender: String): BankProfile? {
+        val cached = resolveBankCache[sender]
+        if (cached != null) {
+            return if (cached === NO_BANK_SENTINEL) null else cached as BankProfile
+        }
+
+        val resolved = resolveBankUncached(sender)
+        if (resolveBankCache.size > 4096) {
+            resolveBankCache.clear()
+        }
+        resolveBankCache[sender] = resolved ?: NO_BANK_SENTINEL
+        return resolved
+    }
+
+    private fun resolveBankUncached(sender: String): BankProfile? {
         findByNumber(sender)?.let { return it }
         if (hasUssdMark(sender)) return null
         val normalized = normalizeSender(sender)
         if (normalized.isEmpty()) return null
         customSenderToProfile[normalized]?.let { return it }
-        val numeric = normalized.all { it.isDigit() }
-        for (profile in BANK_PROFILES) {
-            for (candidateRaw in profile.senderIds) {
-                if (hasUssdMark(candidateRaw)) continue
-                val candidate = normalizeSender(candidateRaw)
-                if (candidate.isEmpty()) continue
-                if (candidate == normalized) return profile
-                val candidateNumeric = candidate.all { it.isDigit() }
-                if (numeric && candidateNumeric && normalized.length >= 5 && candidate.length >= 5 &&
-                    (normalized.endsWith(candidate) || candidate.endsWith(normalized))) {
+        normalizedExactBankMap[normalized]?.let { return it }
+
+        if (normalized.length >= 5 && normalized.all { it.isDigit() }) {
+            for ((candidate, profile) in normalizedNumericCandidates) {
+                if (normalized.endsWith(candidate) || candidate.endsWith(normalized)) {
                     return profile
                 }
             }
@@ -669,12 +710,23 @@ object JibemanSmsEngine : BankSmsParser {
     )
 
     private const val AFTER_LABEL = "[^\\d]{0,18}?([\\d][\\d,]*)"
+    private const val NON_MAIN_BALANCE_LOOKAHEAD = "(?!\\s*(?:باکس|قلک|وام|تسهیلات|قسط|بدهی|امتیاز|هدف|هدیه|بسته|اینترنت|شارژ))"
     private val amountLabelRegexes = amountLabels.map {
         Regex(Pattern.quote(it) + AFTER_LABEL)
     }
     private val balanceLabelRegexes = balanceLabels.map {
-        Regex(Pattern.quote(it) + AFTER_LABEL)
+        Regex(Pattern.quote(it) + NON_MAIN_BALANCE_LOOKAHEAD + AFTER_LABEL)
     }
+    private val strictBalanceLabelRegexes = balanceLabels.map {
+        Regex(Pattern.quote(it) + NON_MAIN_BALANCE_LOOKAHEAD + "\\s*[:：\\-=،]?\\s*(?:مبلغ\\s*)?([\\d][\\d,]*)")
+    }
+    private val nonMainBalanceContextKeywords = listOf(
+        "باکس", "قلک", "پس انداز خودکار", "پس‌انداز خودکار",
+        "وام", "تسهیلات", "قسط", "بدهی", "امتیاز",
+        "قرعه‌کشی", "قرعه کشی", "جایزه", "پیشنهاد",
+        "حداقل موجودی", "کافی نیست", "ناموفق", "عدم موجودی",
+        "کمبود موجودی", "سقف", "مسدود", "بلوکه", "کارت هدیه"
+    )
 
     private val signedGroupedRegex = Regex("([+\\-−])?\\s*(\\d{1,3}(?:,\\d{3})+)")
     private val trailingSignRegex = Regex("\\d{1,3}(?:,\\d{3})+\\s*([+\\-−])")
@@ -756,13 +808,15 @@ object JibemanSmsEngine : BankSmsParser {
     }
 
     /**
-     * Extracts account balance (in Rials) from any non-OTP bank SMS, including
-     * balance-only inquiry or notification messages where [parse] might return null.
+     * Extracts main account balance (in Rials) from non-OTP, non-sub-account balance-only bank SMS.
+     * Explicitly rejects Blu Box / Piggybank / Loan / Installment / Failed-transaction / Promo SMS
+     * so sub-account or promotional figures can NEVER overwrite a bank's real primary account balance.
      */
     fun extractBalanceRial(rawMessage: String): Long? {
         val text = normalizeMessage(rawMessage)
         if (otpRegex.containsMatchIn(text)) return null
-        return numberAfterLabel(text, balanceLabelRegexes)
+        if (nonMainBalanceContextKeywords.any { text.contains(it) }) return null
+        return numberAfterLabel(text, strictBalanceLabelRegexes)
     }
 
     override fun parse(rawMessage: String): ParsedSms? {
@@ -1191,6 +1245,16 @@ object PersianVoiceSlangParserEngine {
         "به حسابم نشست",
         "به کارتم ریخت",
         "به کارتم زد",
+        "برام ریختن",
+        "برام ریختند",
+        "برایم ریختند",
+        "برایم ریختن",
+        "برام واریز کردن",
+        "برام واریز کردند",
+        "واریز کردن",
+        "واریز کردند",
+        "برام زدن",
+        "برام زدند",
         "بهم داد",
         "به من داد",
         "خرید کردم",
@@ -1217,6 +1281,11 @@ object PersianVoiceSlangParserEngine {
         "من",
         "ولی",
         "اما",
+        "برام",
+        "برایم",
+        "هنوز",
+        "ریختن",
+        "ریختند",
         "رفتم",
         "بیرون",
         "اومدم",
@@ -1655,7 +1724,7 @@ object PersianVoiceSlangParserEngine {
     }
 
     private val incomeSpeechRegex = Regex(
-        """(?<=^|\s)(?:دریافت\s+کردم|دریافت\s+شد|دریافتی|دریافت\s+وجه|واریز\s+شد|واریزی|واریز\s+به\s+حساب|واریز\s+حقوق|(?:حقوق|حقوقم|پاداش|پاداشم|عیدی|سود|هدیه|جایزه|کارانه|پورسانت|یارانه|یارانه‌ام)(?:\s+[^\s]+){0,2}\s+(?:گرفتم|ریختن|ریختند|واریز\s+شد|اومد|آمد|نشست)|فروختم|بهم\s+داد|به\s+من\s+داد|به\s+حسابم\s+اومد|به\s+حسابم\s+آمد|به\s+حسابم\s+نشست|به\s+کارتم\s+ریخت|به\s+کارتم\s+زد|درآمدم|درآمد|طلبم\s+رو\s+داد|طلبم\s+را\s+داد|قرضم\s+رو\s+پس\s+داد|پس\s+گرفتم)(?=\s|$)|(?<=^|\s)(?:دریافت|واریز)$"""
+        """(?<=^|\s)(?:دریافت\s+کردم|دریافت\s+شد|دریافتی|دریافت\s+وجه|واریز\s+شد|واریز\s+کردن|واریز\s+کردند|واریزی|واریز\s+به\s+حساب|واریز\s+حقوق|برام\s+ریختن|برام\s+ریختند|برایم\s+ریختند|برام\s+ریخت|برام\s+زدن|برام\s+زد|(?:حقوق|حقوقم|پاداش|پاداشم|عیدی|سود|هدیه|جایزه|کارانه|پورسانت|یارانه|یارانه‌ام)(?:\s+[^\s]+){0,2}\s+(?:گرفتم|ریختن|ریختند|واریز\s+شد|اومد|آمد|نشست)|فروختم|بهم\s+داد|به\s+من\s+داد|به\s+حسابم\s+اومد|به\s+حسابم\s+آمد|به\s+حسابم\s+نشست|به\s+کارتم\s+ریخت|به\s+کارتم\s+زد|درآمدم|درآمد|طلبم\s+رو\s+داد|طلبم\s+را\s+داد|قرضم\s+رو\s+پس\s+داد|پس\s+گرفتم)(?=\s|$)|(?<=^|\s)(?:دریافت|واریز)$"""
     )
 
     private val nominalIncomeSubjectRegex = Regex(
@@ -1747,6 +1816,14 @@ object PersianVoiceSlangParserEngine {
             }
             if (s.startsWith("خرید ") && s.removePrefix("خرید ").trim().isNotBlank()) {
                 s = s.removePrefix("خرید ").trim()
+                changed = true
+            }
+            if (s.startsWith("خرج ") &&
+                !s.startsWith("خرج از ") &&
+                s != "خرج کرد" &&
+                s.removePrefix("خرج ").trim().isNotBlank()
+            ) {
+                s = s.removePrefix("خرج ").trim()
                 changed = true
             }
         }
@@ -1895,11 +1972,22 @@ object PersianVoiceSlangParserEngine {
         return pivotNarrativeIntroKeepingAmountInternal(softResolved)
     }
 
+    private val colloquialMillionMacroRegex = Regex(
+        """(?<=^|\s)(?:حقوق|حقوقم|دستمزد|دستمزدم|عیدی|عیدیم|پاداش|پاداشم|درآمد|درآمدم|اجاره|رهن|ودیعه|پیش‌پرداخت|پیش\s+پرداخت|ماشین|خودرو|خونه|خانه|آپارتمان|ملک|زمین|لپ‌تاپ|لپ\s+تاپ|آیفون|قسط‌های\s+بزرگ|قسط\s+بزرگ|قسط‌های\s+بزرگی|قسط\s+بزرگی|وام\s+بزرگ|قسط\s+مسکن|قسط\s+ماشین|قسط\s+خودرو)(?=\s|$)"""
+    )
+
+    private fun shouldInferColloquialMillionScale(clause: String, numVal: Double): Boolean {
+        if (numVal !in 1.0..999.0) return false
+        return colloquialMillionMacroRegex.containsMatchIn(clause)
+    }
+
     /**
      * Parses spoken Persian numbers and digits into Tomans while ignoring item quantities and mental-math sub-prices:
      * - Strips bare stumbled numbers before `<number> <currency>` (e.g. "۲۱۷ ۲۱۸ تومن" -> "۲۱۸ تومن").
      * - When a clause contains multiple currency amounts (e.g. "۳۹ هزار تومان دادم به دو تا سه تا ۵ تومن ۵ تومن نانوایی"),
      *   takes the LARGEST explicit currency amount in that clause (`39,000` Tomans), ignoring smaller sub-amounts (`۵ تومن`).
+     * - Disambiguates colloquial Iranian `"تومن"` scale: when no explicit `"هزار"`/`"میلیون"` is spoken and the clause
+     *   describes a macro Iranian category (`حقوق`, `اجاره`, `رهن`, `ماشین`, `خانه`, `قسط‌های بزرگ`), `۳۰ تومن` -> `30,000,000` Tomans.
      */
     fun parseSpokenPersianAmountToman(rawText: String): Long {
         val cleaned = stripStumbledNumbers(PersianNumberUtils.normalizePersianText(rawText.trim()))
@@ -1930,6 +2018,8 @@ object PersianVoiceSlangParserEngine {
                     unit.startsWith("میلیون") || unit == "ملیون" -> (numVal * 1_000_000.0).toLong()
                     unit.startsWith("ریال") -> (numVal / 10.0).toLong()
                     unit.startsWith("هزار") -> (numVal * 1_000.0).toLong()
+                    numVal in 1.0..999.0 && unit.startsWith("توم") && shouldInferColloquialMillionScale(cleaned, numVal) ->
+                        (numVal * 1_000_000.0).toLong()
                     numVal in 1.0..999.0 -> (numVal * 1_000.0).toLong()
                     else -> numVal.toLong()
                 }
@@ -1969,7 +2059,11 @@ object PersianVoiceSlangParserEngine {
             var phraseVal = totalAccumulated
             if (currentGroup > 0L) {
                 phraseVal += if (!hasExplicitMultiplier && currentGroup in 1L..999L) {
-                    currentGroup * 1_000L
+                    if (shouldInferColloquialMillionScale(cleaned, currentGroup.toDouble())) {
+                        currentGroup * 1_000_000L
+                    } else {
+                        currentGroup * 1_000L
+                    }
                 } else if (hasExplicitMultiplier && totalAccumulated >= 1_000_000L && currentGroup in 1L..999L) {
                     currentGroup * 1_000L
                 } else {
@@ -2099,6 +2193,25 @@ object PersianVoiceSlangParserEngine {
         return hasWantedTo && hasBut
     }
 
+    private val remainingBalanceCommentaryRegex = Regex(
+        """(?<=^|\s)(?:باقی\s*مانده|باقی‌مانده|باقی\s*مونده|باقی‌مونده|باقی\s*ماند|باقی\s*موند|مونده|موند|اضافه\s+اومد|اضافه\s+آمد|اضافه\s+موند|اضافه\s+مونده|تهش\s+موند|تهش\s+مونده|موجودی\s+مونده|موجودی\s+مانده|موجودی\s+باقی|مانده\s+دارم|مونده\s+دارم|مانده\s+است)(?=\s|$)"""
+    )
+
+    private val explicitActionVerbInClauseRegex = Regex(
+        """(?<=^|\s)(?:خرج\s+کردم|خرج\s+شد|پرداخت\s+کردم|خریدم|خرید\s+کردم|دادم|گرفتم|واریز\s+کردم|واریز\s+شد|دریافت\s+کردم|فروختم|کارت\s+کشیدم|ریختن|ریختند)(?=\s|$)"""
+    )
+
+    /**
+     * Returns true when a clause merely states leftover/remaining balance commentary
+     * (e.g. "۵ میلیون تومان هنوز باقی مانده" or "۵ تومن موند") rather than an actual transaction.
+     */
+    fun isRemainingBalanceCommentaryClause(clause: String): Boolean {
+        val norm = PersianNumberUtils.normalizePersianText(clause.trim())
+        if (norm.isBlank()) return false
+        if (!remainingBalanceCommentaryRegex.containsMatchIn(norm)) return false
+        return !explicitActionVerbInClauseRegex.containsMatchIn(norm)
+    }
+
     /**
      * Extracts the intended item subject from a soft-cancelled "می‌خواستم X بدم ولی" clause
      * so that if the immediately following clause ("۴۹ تومن دادم") omits the noun, the subject ("۲ تا بستنی") is preserved.
@@ -2210,7 +2323,7 @@ object PersianVoiceSlangParserEngine {
             }
 
             val precedingParsed = parseSingleVoiceClause(precedingSegment, null, "نقدی / دستی")
-            val hasExplicitVerb = Regex("""(?<=^|\s)(?:دادم|ندادم|خریدم|نخریدم|گرفتم|نگرفتم|زدم|نزدم|کردم|نکردم|فروختم|بدم|بود|نشد|شد)(?=\s|$)""")
+            val hasExplicitVerb = Regex("""(?<=^|\s)(?:دادم|ندادم|خریدم|نخریدم|گرفتم|نگرفتم|زدم|نزدم|کردم|نکردم|فروختم|بدم|بود|نشد|شد|ریختن|ریختند|ریخت|اومد|آمد|نشست)(?=\s|$)""")
                 .containsMatchIn(precedingSegment)
 
             if (precedingParsed.totalAmountToman > 0L &&
@@ -2493,6 +2606,10 @@ object PersianVoiceSlangParserEngine {
         var pendingSubjectFromSoftCancelled = ""
 
         for (rawPart in rawCandidateParts) {
+            if (isRemainingBalanceCommentaryClause(rawPart)) {
+                pendingSubjectFromSoftCancelled = ""
+                continue
+            }
             if (isNegatedOrCancelledClause(rawPart)) {
                 if (!hasHardNegationMarker(rawPart)) {
                     val subject = extractSubjectFromSoftCancelledClause(rawPart)
@@ -2636,23 +2753,44 @@ object PersianVoiceSlangParserEngine {
             val validClauses = mutableListOf<String>()
             val parsedItems = mutableListOf<ParsedVoiceExpense>()
             var lastIncomeTitle = ""
+            var lastMillionIncomeToman = 0L
+            val partitiveMacroExpenseRegex = Regex("""(?<=^|\s)(?:قسط|قسط‌ها|قسطها|اقساط|وام|اجاره|رهن|چک|بدهی)(?=\s|$)""")
+            val microEverydayRegex = Regex("""(?<=^|\s)(?:بستنی|نان|نانوایی|نون|نونوایی|پفک|شارژ|تاکسی|میوه|موز|قهوه|چای|غذا|ناهار|شام|صبحانه|خوراکی|تنقلات)(?=\s|$)""")
+            val explicitUnitRegex = Regex("""(?<=^|\s)(?:هزارش|هزاری|هزار|میلیونی|میلیون|ملیون|میلیاردی|میلیارد|ریالش|ریالی|ریال)(?=\s|$)""")
+
             for (clause in mergedClauses) {
                 var parsed = parseSingleVoiceClause(clause, null, defaultBankName)
                 if (parsed.isIncome && parsed.totalAmountToman > 0L && parsed.purposeCategory.isNotBlank()) {
                     lastIncomeTitle = parsed.purposeCategory
-                } else if (!parsed.isIncome && parsed.totalAmountToman > 0L &&
-                    (parsed.purposeCategory.isBlank() || parsed.purposeCategory == "خرج کرد") &&
-                    expenseVerbOrMarkerRegex.containsMatchIn(clause)
-                ) {
-                    val enrichedTitle = if (lastIncomeTitle.isNotBlank() &&
-                        lastIncomeTitle != "دریافت وجه" &&
-                        lastIncomeTitle != "واریز وجه"
-                    ) {
-                        "خرج از $lastIncomeTitle"
-                    } else {
-                        "خرج کرد"
+                    if (parsed.totalAmountToman >= 5_000_000L) {
+                        lastMillionIncomeToman = parsed.totalAmountToman
                     }
-                    parsed = parsed.copy(purposeCategory = enrichedTitle)
+                } else if (!parsed.isIncome && parsed.totalAmountToman > 0L) {
+                    if (lastMillionIncomeToman >= 5_000_000L &&
+                        parsed.totalAmountToman in 1_000L..999_000L &&
+                        parsed.totalAmountToman % 1_000L == 0L &&
+                        partitiveSpendBackRefRegex.containsMatchIn(clause) &&
+                        !explicitUnitRegex.containsMatchIn(clause) &&
+                        partitiveMacroExpenseRegex.containsMatchIn(clause) &&
+                        !microEverydayRegex.containsMatchIn(clause) &&
+                        (parsed.totalAmountToman * 1_000L) <= lastMillionIncomeToman
+                    ) {
+                        val promoted = parsed.totalAmountToman * 1_000L
+                        parsed = parsed.copy(totalAmountToman = promoted, userShareToman = promoted)
+                    }
+                    if ((parsed.purposeCategory.isBlank() || parsed.purposeCategory == "خرج کرد") &&
+                        expenseVerbOrMarkerRegex.containsMatchIn(clause)
+                    ) {
+                        val enrichedTitle = if (lastIncomeTitle.isNotBlank() &&
+                            lastIncomeTitle != "دریافت وجه" &&
+                            lastIncomeTitle != "واریز وجه"
+                        ) {
+                            "خرج از $lastIncomeTitle"
+                        } else {
+                            "خرج کرد"
+                        }
+                        parsed = parsed.copy(purposeCategory = enrichedTitle)
+                    }
                 }
                 if (parsed.totalAmountToman > 0L && parsed.purposeCategory.isNotBlank()) {
                     validClauses.add(clause)
@@ -2881,6 +3019,23 @@ object PersianVoiceSlangParserEngine {
         if (hasSaleVerb) {
             corePhrase = corePhrase.replace(saleVerbRegex, " ")
         }
+
+        // Normalize colloquial Persian possessive suffix after "خرج" before "شد":
+        // e.g. "خرج بستنیش شد" -> "خرج بستنی شد", "خرج کرایه‌اش شد" -> "خرج کرایه شد"
+        val preservedIshWords = setOf("آرایش", "نمایش", "آزمایش", "پالایش", "فرمایش", "افزایش", "کاهش", "آسایش", "ستایش")
+        corePhrase = Regex("""(?<=^|\s)خرج\s+([ء-ۿ\u200C]{3,})ه‌اش(?=\s+شد(?:\s|$))""")
+            .replace(corePhrase) { m -> "خرج ${m.groupValues[1]}ه" }
+        corePhrase = Regex("""(?<=^|\s)خرج\s+([ء-ۿ\u200C]{2,}یش)(?=\s+شد(?:\s|$))""")
+            .replace(corePhrase) { m ->
+                val word = m.groupValues[1]
+                if (word in preservedIshWords) m.value else "خرج ${word.removeSuffix("ش")}"
+            }
+
+        // Strip trailing relative filler clauses like "بزرگی که داشتم" -> "بزرگ", "بدهی‌ای که داشتم" -> "بدهی"
+        corePhrase = Regex("""([ء-ۿ\u200C]{2,})(?:‌ای|ی)\s+(?:که\s+داشتم|که\s+دارم|که\s+بود|که\s+بودش|که\s+می‌دادم|که\s+میدادم)(?=\s|$)""")
+            .replace(corePhrase) { m -> m.groupValues[1] }
+        corePhrase = Regex("""(?<=^|\s)(?:که\s+داشتم|که\s+دارم|که\s+بود|که\s+بودش|که\s+می‌دادم|که\s+میدادم)(?=\s|$)""")
+            .replace(corePhrase, " ")
 
         corePhrase = corePhrase
             .replace(Regex("""(?:با|از)\s+کارت\s+[^\s]+"""), " ")

@@ -120,6 +120,10 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 repository.ensureSeeded()
+                val hasCachedData = dao.getAllBankAccountsNow().isNotEmpty() || dao.getAllTransactionsNow().isNotEmpty()
+                if (hasCachedData) {
+                    _isSyncingSms.value = false
+                }
                 repository.scanDeviceSmsInboxLast30Days(appContext, daysBack = 3650)
                 syncInitialSelectedMonthWithTransactions()
             } finally {
@@ -524,10 +528,18 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun openVoiceForUntaggedTransaction(tx: TransactionEntity) {
         _selectedTransactionForDetail.value = null
+        val defaultAutoPurposes = setOf(
+            "نیازمند تکمیل صوتی",
+            "برداشت کارتی / خرید",
+            "افزایش موجودی حساب",
+            "واریز به حساب",
+            "واریز بانکی",
+            "دریافت وجه",
+            "واریز حقوق ماهانه"
+        )
         val initialSpeech = if (!tx.isUntagged &&
             tx.purpose.isNotBlank() &&
-            tx.purpose != "نیازمند تکمیل صوتی" &&
-            tx.purpose != "برداشت کارتی / خرید"
+            tx.purpose.trim() !in defaultAutoPurposes
         ) {
             tx.purpose
         } else {
@@ -545,7 +557,8 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             dongAmountToman = tx.dongAmountToman,
             dongFriendName = tx.dongFriendName,
             userShareToman = tx.userShareToman,
-            targetUntaggedTransaction = tx
+            targetUntaggedTransaction = tx,
+            isIncome = tx.type == "INCOME"
         )
         if (initialSpeech.isNotBlank()) {
             parseAndUpdateVoiceState(initialSpeech, tx)
@@ -612,6 +625,32 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             parsedMultiItems = currentList,
             purposeCategory = combinedNote
         )
+    }
+
+    fun onToggleMultiVoiceItemScale(index: Int) {
+        if (_voiceState.value.targetUntaggedTransaction != null) return
+        val currentList = _voiceState.value.parsedMultiItems
+        if (index !in currentList.indices) return
+        val existing = currentList[index]
+        val curAmt = existing.totalAmountToman
+        val nextAmt = when {
+            curAmt in 1_000L..999_000L -> curAmt * 1_000L
+            curAmt >= 1_000_000L && curAmt % 1_000L == 0L -> curAmt / 1_000L
+            else -> return
+        }
+        onUpdateMultiVoiceItem(index, existing.purposeCategory, nextAmt.toString())
+    }
+
+    fun onToggleSingleVoiceScale() {
+        val current = _voiceState.value
+        if (current.targetUntaggedTransaction != null) return
+        val curAmt = current.totalAmountToman
+        val nextAmt = when {
+            curAmt in 1_000L..999_000L -> curAmt * 1_000L
+            curAmt >= 1_000_000L && curAmt % 1_000L == 0L -> curAmt / 1_000L
+            else -> return
+        }
+        onVoiceManualAmountChanged(nextAmt.toString())
     }
 
     fun onUpdateMultiVoiceItem(index: Int, newTitle: String, newAmountStr: String) {

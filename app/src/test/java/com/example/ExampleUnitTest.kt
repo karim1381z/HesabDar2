@@ -657,6 +657,83 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun testVideo10BatchVoiceNluRemainingBalanceAndColloquialMillionScale() {
+        // 1. Video 10batch_18: Remaining balance commentary ("۵ میلیون تومان هنوز باقی مانده") MUST be dropped!
+        val salaryAndInstallmentsWithRemaining = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(
+            "سلام من امروز حقوقم رو ریختن ۳۰ میلیون تومان و ۲۵ میلیون تومان خرج قسط‌ها شد و ۵ میلیون تومان هنوز باقی مانده"
+        )
+        assertEquals(2, salaryAndInstallmentsWithRemaining.size)
+        assertEquals("حقوق", salaryAndInstallmentsWithRemaining[0].purposeCategory)
+        assertEquals(30_000_000L, salaryAndInstallmentsWithRemaining[0].totalAmountToman)
+        assertEquals(true, salaryAndInstallmentsWithRemaining[0].isIncome)
+
+        assertEquals("قسط‌ها", salaryAndInstallmentsWithRemaining[1].purposeCategory)
+        assertEquals(25_000_000L, salaryAndInstallmentsWithRemaining[1].totalAmountToman)
+        assertEquals(false, salaryAndInstallmentsWithRemaining[1].isIncome)
+
+        // 2. Video 10batch_19: Colloquial Iranian "تومن" scale disambiguation + clean titles
+        val colloquialMixed = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(
+            "من ۳۰ تومن حقوق برام ریختن ۲۵ تومنش خرج بستنیش شد و ۲۵ تومنش خرج قسط‌های بزرگی که داشتم"
+        )
+        assertEquals(3, colloquialMixed.size)
+        assertEquals("حقوق", colloquialMixed[0].purposeCategory)
+        assertEquals(30_000_000L, colloquialMixed[0].totalAmountToman)
+        assertEquals(true, colloquialMixed[0].isIncome)
+
+        assertEquals("بستنی", colloquialMixed[1].purposeCategory)
+        assertEquals(25_000L, colloquialMixed[1].totalAmountToman)
+        assertEquals(false, colloquialMixed[1].isIncome)
+
+        assertEquals("قسط‌های بزرگ", colloquialMixed[2].purposeCategory)
+        assertEquals(25_000_000L, colloquialMixed[2].totalAmountToman)
+        assertEquals(false, colloquialMixed[2].isIncome)
+
+        // 3. Generalized remaining-balance commentary variants
+        assertEquals(true, PersianVoiceSlangParserEngine.isRemainingBalanceCommentaryClause("۵ تومن موند"))
+        assertEquals(true, PersianVoiceSlangParserEngine.isRemainingBalanceCommentaryClause("تهش ۳ میلیون اضافه اومد"))
+        assertEquals(false, PersianVoiceSlangParserEngine.isRemainingBalanceCommentaryClause("۵۰ تومن قسط مونده رو پرداخت کردم"))
+
+        // 4. Partitive macro expense ("قسط") following million-scale income promotes to million scale, while standalone "قسط" stays thousand scale
+        val partitiveInstallment = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(
+            "۳۰ تومن حقوق ریختن ۲۰ تومنش خرج قسط شد"
+        )
+        assertEquals(2, partitiveInstallment.size)
+        assertEquals(30_000_000L, partitiveInstallment[0].totalAmountToman)
+        assertEquals(20_000_000L, partitiveInstallment[1].totalAmountToman)
+        assertEquals("قسط", partitiveInstallment[1].purposeCategory)
+    }
+
+    @Test
+    fun testBluBoxBalanceRejectionAndFastMemoizedResolveBank() {
+        // 1. Blu Box / piggybank / failed tx / promo SMS MUST NOT return a main account balance in extractBalanceRial
+        val bluBoxSms = "بلو\nموجودی باکس شما: ۵۳۹,۴۲۰ ریال"
+        assertEquals(null, JibemanSmsEngine.extractBalanceRial(bluBoxSms))
+
+        val bluFailedSms = "بلو\nتراکنش ناموفق به دلیل عدم موجودی کافی. حداقل موجودی ۵۳۹,۴۲۰ ریال"
+        assertEquals(null, JibemanSmsEngine.extractBalanceRial(bluFailedSms))
+
+        val bluLoanSms = "بلو\nمبلغ قسط وام شما: ۵۳۹,۴۲۰ ریال، مانده وام: ۱۰,۰۰۰,۰۰۰ ریال"
+        assertEquals(null, JibemanSmsEngine.extractBalanceRial(bluLoanSms))
+
+        // 2. Real Blu transaction SMS extracts exact main balance (11,522,065 Rials = 1,152,206 Tomans)
+        val realBluTxSms = "بلو\nبرداشت پول\nمبلغ: ۳۰۰,۰۰۰ ریال\nموجودی: ۱۱,۵۲۲,۰۶۵ ریال"
+        val parsedBlu = JibemanSmsEngine.parse(realBluTxSms)
+        assertEquals(300_000L, parsedBlu?.amount)
+        assertEquals(11_522_065L, parsedBlu?.balance)
+
+        // 3. Memoized resolveBank handles thousands of unknown + known senders in milliseconds
+        val startMs = System.currentTimeMillis()
+        for (i in 0 until 20_000) {
+            val sender = if (i % 50 == 0) "+989820002015" else "+98912000${i % 200}"
+            JibemanSmsEngine.resolveBank(sender)
+        }
+        val elapsedMs = System.currentTimeMillis() - startMs
+        assertEquals("resolveBank 20,000 lookups took ${elapsedMs}ms", true, elapsedMs < 1_000L)
+        assertEquals("بلو", JibemanSmsEngine.resolveBank("+982187641")?.nameFa)
+        assertEquals("بلو", JibemanSmsEngine.resolveBank("300087641")?.nameFa)
+    }
+
+    @Test
     fun testFullOrosiRegressionAndStressSuitePasses100Percent() {
         val report = com.example.domain.OrosiRegressionSuite.runFullRegressionAndStressSuite()
         for (r in report.results) {

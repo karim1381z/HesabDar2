@@ -148,6 +148,8 @@ fun VoiceOverlayBottomSheet(
     onUpdateMultiItem: (index: Int, newTitle: String, newAmountStr: String) -> Unit = { _, _, _ -> },
     onToggleMultiItemType: (index: Int) -> Unit = {},
     onSetMultiItemType: (index: Int, isIncome: Boolean) -> Unit = { idx, _ -> onToggleMultiItemType(idx) },
+    onToggleMultiItemScale: (index: Int) -> Unit = {},
+    onToggleSingleScale: () -> Unit = {},
     onSimulateVoiceRecord: () -> Unit,
     onConfirmVoiceEntry: () -> Unit,
     onDismiss: () -> Unit
@@ -810,6 +812,35 @@ fun VoiceOverlayBottomSheet(
                                     )
                                 )
                             }
+
+                            if (targetTx == null &&
+                                (item.totalAmountToman in 1_000L..999_000L ||
+                                    (item.totalAmountToman >= 1_000_000L && item.totalAmountToman % 1_000L == 0L))
+                            ) {
+                                val isThousandScale = item.totalAmountToman in 1_000L..999_000L
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(50))
+                                            .background(OrosiSurfaceContainer)
+                                            .border(1.dp, SaffronGoldLight.copy(alpha = 0.45f), RoundedCornerShape(50))
+                                            .clickable { onToggleMultiItemScale(idx) }
+                                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                                            .testTag("multi_voice_item_scale_$idx")
+                                    ) {
+                                        Text(
+                                            text = if (isThousandScale) "تبدیل به میلیون (×۱۰۰۰)" else "تبدیل به هزار (÷۱۰۰۰)",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = SaffronGoldLight,
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -939,6 +970,34 @@ fun VoiceOverlayBottomSheet(
                                     unfocusedBorderColor = OrosiHairline
                                 )
                             )
+                        }
+
+                        if (voiceState.totalAmountToman in 1_000L..999_000L ||
+                            (voiceState.totalAmountToman >= 1_000_000L && voiceState.totalAmountToman % 1_000L == 0L)
+                        ) {
+                            val isThousandScale = voiceState.totalAmountToman in 1_000L..999_000L
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(50))
+                                        .background(OrosiSurfaceContainer)
+                                        .border(1.dp, SaffronGoldLight.copy(alpha = 0.45f), RoundedCornerShape(50))
+                                        .clickable { onToggleSingleScale() }
+                                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                                        .testTag("voice_single_scale_toggle")
+                                ) {
+                                    Text(
+                                        text = if (isThousandScale) "تبدیل به میلیون (×۱۰۰۰)" else "تبدیل به هزار (÷۱۰۰۰)",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = SaffronGoldLight,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
+                            }
                         }
                     } else {
                         Row(

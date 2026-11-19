@@ -535,12 +535,18 @@ private fun JibemanGroupedTransactionRow(
             val hasCustomNote = !transaction.isUntagged &&
                 transaction.purpose.isNotBlank() &&
                 transaction.purpose != "نیازمند تکمیل صوتی" &&
-                transaction.purpose != "برداشت کارتی / خرید"
+                transaction.purpose != "برداشت کارتی / خرید" &&
+                transaction.purpose != "افزایش موجودی حساب" &&
+                transaction.purpose != "واریز به حساب"
 
             val noteText = if (hasCustomNote) {
                 transaction.title.ifBlank { transaction.displayTitle }
             } else if (transaction.isUntagged) {
-                "خرید کارتی (${transaction.shortBankName})"
+                if (transaction.type == "INCOME") {
+                    "واریز به کارت (${transaction.shortBankName})"
+                } else {
+                    "خرید کارتی (${transaction.shortBankName})"
+                }
             } else {
                 transaction.title
             }
