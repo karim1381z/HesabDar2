@@ -63,10 +63,22 @@ android {
     compose = true
     buildConfig = true
   }
+  val bankLogoAssetsDir = layout.buildDirectory.dir("generated/bankLogoAssets").get().asFile
+  val copyBankLogosAsset by tasks.registering(Copy::class) {
+    from("../public/assets/aistudio") {
+      include("jibeman_android_drawables_*.zip")
+    }
+    into(bankLogoAssetsDir)
+  }
+
   sourceSets {
     getByName("main") {
-      assets.srcDirs("src/main/assets", "../public/assets/aistudio")
+      assets.directories.add(bankLogoAssetsDir.absolutePath)
     }
+  }
+
+  tasks.named("preBuild") {
+    dependsOn(copyBankLogosAsset)
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
   dependenciesInfo {

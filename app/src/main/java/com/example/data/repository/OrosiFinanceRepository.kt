@@ -1561,28 +1561,57 @@ class OrosiFinanceRepository(
         )
     }
 
+    data class VoiceBatchSaveSummary(
+        val taggedSmsCount: Int,
+        val newCashTxCount: Int,
+        val commitmentCount: Int
+    )
+
     /**
      * Inserts multiple voice expenses and/or future commitments (بدهی / طلب / برنامه خرید / واریز آینده)
      * when the user speaks a multi-clause sentence in "+ ثبت صوتی" mode.
-     * Past relative anchors (`دیروز`, `پریروز`, etc.) are applied via `item.eventDayOffset` so the
-     * transaction lands on its true Jalali date.
+     * - Items linked to an existing untagged bank SMS (`item.matchedBankTxId != null`) ONLY update
+     *   `title`, `purpose`, and `isUntagged = false` on that bank row (never altering bank amount/bankName
+     *   and never creating a duplicate cash transaction).
+     * - Past relative anchors (`دیروز`, `پریروز`, etc.) are applied via `item.eventDayOffset` so new cash
+     *   transactions land on their true Jalali date.
      */
-    suspend fun confirmMultiVoiceExpenses(items: List<ParsedVoiceExpense>) {
+    suspend fun confirmMultiVoiceExpenses(items: List<ParsedVoiceExpense>): VoiceBatchSaveSummary {
         val validItems = items.filter { it.totalAmountToman > 0L && it.purposeCategory.isNotBlank() }
-        if (validItems.isEmpty()) return
+        if (validItems.isEmpty()) return VoiceBatchSaveSummary(0, 0, 0)
 
         val baseNow = System.currentTimeMillis()
         val manualBankLabel = "نقدی / دستی"
+        var taggedSmsCount = 0
+        var newCashTxCount = 0
+        var commitmentCount = 0
 
         validItems.forEachIndexed { index, item ->
             if (item.isCommitment) {
                 insertVoiceCommitment(item, baseNow + index)
+                commitmentCount++
                 return@forEachIndexed
+            }
+
+            val cleanPurpose = item.purposeCategory.trim()
+            val linkedBankTxId = item.matchedBankTxId
+            if (linkedBankTxId != null) {
+                val existing = dao.getTransactionById(linkedBankTxId)
+                if (existing != null) {
+                    dao.updateTransaction(
+                        existing.copy(
+                            title = cleanPurpose,
+                            purpose = cleanPurpose,
+                            isUntagged = false
+                        )
+                    )
+                    taggedSmsCount++
+                    return@forEachIndexed
+                }
             }
 
             val effectiveTimestamp = baseNow + item.eventDayOffset * 86_400_000L + index
             val effectiveJalali = JalaliCalendarUtils.timestampToJalali(effectiveTimestamp)
-            val cleanPurpose = item.purposeCategory.trim()
             val resolvedStore = item.merchant.trim()
                 .ifBlank { item.storeName.trim() }
                 .takeIf { it.isNotBlank() && it != "بانک" && it != "تراکنش صوتی" }
@@ -1607,10 +1636,16 @@ class OrosiFinanceRepository(
                     bankName = manualBankLabel
                 )
             )
+            newCashTxCount++
         }
 
         recalculateRealSafeToSpend()
         persistSnapshotToSharedPrefs()
+        return VoiceBatchSaveSummary(
+            taggedSmsCount = taggedSmsCount,
+            newCashTxCount = newCashTxCount,
+            commitmentCount = commitmentCount
+        )
     }
 
     /**

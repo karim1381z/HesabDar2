@@ -1,5 +1,5 @@
 # Orosi (حسابدار اُرسی) — Chief Product Manager & Principal Architect Constitution
-> **Instruction Version:** `v2.2` (Living Document — Auto-Evolving per Release)
+> **Instruction Version:** `v2.3` (Living Document — Auto-Evolving per Release)
 > **Product:** Orosi (حسابدار اُرسی) — Calm, Offline-First Iranian Personal Finance & Accounting App
 > **Stack:** Kotlin • Jetpack Compose • Material 3 • Room • Jalali Calendar • Offline Bank SMS & Persian Voice NLU Engines
 
@@ -49,11 +49,13 @@ When making any architectural, UX, or scope decision, resolve conflicts using th
    - Recent 2 Jalali months load immediately; older months load lazily on demand (`syncTransactionsForJalaliMonth`) with smooth shimmer feedback.
 2. **3-Second Voice Capture:**
    - Logging cash/voice transactions or tagging bank SMS must work in one breath with zero redundant dialogs or friction.
-3. **120Hz Silky-Smooth Scroll & Zero-Jank Startup Invariant (`DashboardScreen`, `TransactionsScreen`, `BankLogoAvatar`):**
-   - Every `LazyColumn`/`LazyRow` item MUST declare stable `key` and `contentType`, and pre-compute immutable `@Immutable` row UI models outside the scrolling row composable.
-   - Bank logo PNG decoding (`JibemanAssetLogoCache.preloadAsync`) MUST run asynchronously on `Dispatchers.IO`, downscale to `96×96 px`, and publish a reactive `loadVersion` — NEVER block the UI thread with synchronous ZIP decompression on launch or composition.
+3. **Zero-Bloat APK Packaging & 120Hz Flat-HWUI Scroll Invariant (`build.gradle.kts`, `DashboardScreen`, `TransactionsScreen`, `BankLogoAvatar`):**
+   - **Zero Media Bloat in APK Assets:** NEVER mount raw `/public/assets/aistudio` directly in `assets.directories` (uploaded review `.mp4` videos bloat APK size by 75+ MB and slow cold launch). Always copy ONLY `jibeman_android_drawables_*.zip` via the Gradle `copyBankLogosAsset` task into `generated/bankLogoAssets`.
+   - **Instant Launch Window:** Keep dark lapis `#09131C` `android:windowBackground` in `themes.xml`, avoid per-recomposition `SideEffect` system-bar updates in `MainActivity`, and keep splash duration minimal (`300ms`).
+   - Every `LazyColumn`/`LazyRow` item MUST declare stable `key` and `contentType`, and pre-compute immutable `@Immutable` row UI models (including pre-formatted amount runs and combined metadata strings) outside the scrolling row composable.
+   - Bank logo PNG decoding (`JibemanAssetLogoCache.preloadAsync`) MUST run asynchronously on `Dispatchers.IO`, downscale to `96×96 px`, and cache `BitmapPainter`s directly (`peekCachedPainter()` bypassing Snapshot `loadVersion` subscription once ready) — NEVER block the UI thread or allocate new `BitmapPainter`s inside scrolling rows.
    - Number formatting (`PersianNumberUtils.formatGroupedPersianLong`) MUST stay zero-allocation (never instantiate `DecimalFormat` inside scrolling rows).
-   - Never allocate `RoundedCornerShape`, `Brush`, `TextStyle.copy(...)`, or per-row delete-confirmation state inside scrolling rows; fuse card fill + stroke into a single `Modifier.drawBehind`, stabilize ViewModel callbacks via `remember(viewModel)`, and always apply `.clip(DashCardShape28)` BEFORE `.background(...).drawBehind { ... }` on cards that draw decorative circles/glows.
+   - **Flat HWUI Scrolling Rows:** Avoid per-frame `Modifier.drawBehind { drawRoundRect(..., style = Stroke(...)) }` on scrolling list rows (prefer calm flat tonal fills via `Modifier.background(color, shape)`), halve row LayoutNodes by removing unnecessary `Spacer`s and nested badges, stabilize ViewModel callbacks via `remember(viewModel)`, and always apply `.clip(DashCardShape28)` BEFORE `.background(...).drawBehind { ... }` on hero cards that draw decorative circles/glows.
 
 ### P2 — Iranian Financial Culture & Colloquial Voice Intelligence
 1. **Colloquial `"تومن"` Scale Disambiguation:**
@@ -70,13 +72,21 @@ When making any architectural, UX, or scope decision, resolve conflicts using th
    - Past relative anchors (`دیروز` = `-1`, `پریروز` = `-2`, `سه روز پیش` = `-3`) MUST stamp regular transactions with their true historical timestamp & Jalali `weekdayDate`.
    - Unpaid/future personal obligations (`بدهی دارم / بدهکارم` -> `DEBT`, `طلب دارم / طلبکارم` -> `RECEIVABLE`), expected future inflows (`فردا میاد به حسابم`, `قراره واریز بشه` -> `RECEIVABLE`, `واریز آینده`), and future planned purchases (`می‌خوام دوچرخه بخرم`, `قراره بخرم` -> `DEBT`, `برنامه خرید`) MUST be previewed with clear destination/date pills in `VoiceOverlayBottomSheet` and saved directly into Room `commitments` (`category = "DONG"`).
    - Already-settled debt/receivable payments (`بدهی رو دادم`, `طلبم رو گرفتم`) MUST remain regular `EXPENSE`/`INCOME` ledger transactions (`commitmentKind = null`).
-4. **Iranian Accounting Primitives:**
+4. **Batch Voice Auto-Matching onto Untagged Bank SMS (`OrosiVoiceSmsMatcher`):**
+   - When the user speaks one or multiple expenses/deposits in `+ ثبت صوتی`, automatically match each non-commitment item 1-to-1 against existing untagged bank SMS rows on that item's target Jalali day (`eventDayOffset`) with matching direction (`EXPENSE`/`INCOME`) and exact amount, previewing the linked bank SMS on the card with a 1-tap `ثبت نقدی جدا` unlink button.
+   - When no exact match exists, default to saving as a new cash transaction (`تراکنش نقدی جدید`), AND if a close remaining unclaimed same-day untagged bank SMS exists, show a 1-tap `اتصال به پیامک ...` suggestion button.
+   - Linking a spoken item to an existing bank SMS row MUST update ONLY `title`/`purpose`/`isUntagged = false` in-place (preserving P0 immutable bank amount, bank name, and zero duplicate rows).
+5. **Iranian Accounting Primitives:**
    - Native Jalali calendar (`JalaliCalendarUtils`), Toman display (converted cleanly from bank Rials ÷ 10), `دُنگ` (shared expense splits), `چک صیادی`, `وام و قسط`, optional `تنخواه` (spending vs. savings account separation), and payday cycle budgeting (`ماه حقوقی`).
 
 ### P3 — Calm, Stress-Free Persian RTL Craft (Orosi Brand Values)
 - **Zero Financial Anxiety:** Never display a minus sign (`-`) next to expenses. Use calm semantic color separation (`RubyRoseSoft` for expenses, `NishapurTurquoiseSoft` with LTR-isolated `+` for income).
-- **Strict BiDi & Zero-Overlap Amount Rule (`OrosiAmountText`):** NEVER render mixed LTR-digits + RTL-`"تومان"` inside a single constrained `Text(..., maxLines = 1, softWrap = false)` (triggers Android `StaticLayout` RTL text overlap). ALWAYS use `OrosiAmountText`, which separates the LTR-isolated numeric run and `"تومان"` into distinct sibling `Text` composables inside a `Row` or stacked `Column`.
-- **Tactile Material 3 Interactive Controls:** Interactive buttons and segmented toggles inside modals (`VoiceOverlayBottomSheet`, `HeroMathBreakdownBottomSheet`) MUST use filled/tonal `Surface` containers with clear icons, crisp contrast, and comfortable touch height (`>= 42–48.dp`) — never faint flat borders that look non-clickable.
+- **Strict BiDi & Zero-Overlap Rule (`OrosiAmountText` & `formatScaleToggleLabel`):**
+  - NEVER render mixed LTR-digits + RTL-`"تومان"` inside a single constrained `Text(..., maxLines = 1, softWrap = false)` (triggers Android `StaticLayout` RTL text overlap). ALWAYS use `OrosiAmountText` (which separates the LTR-isolated numeric run and `"تومان"` into distinct sibling `Text` composables).
+  - ALWAYS isolate math operators (`×۱۰۰۰`, `÷۱۰۰۰`) with `\u2066\u200E...\u2069` via `PersianNumberUtils.formatScaleToggleLabel(...)` so operators always render to the LEFT of Persian digits in RTL layouts.
+- **Calm Interactive-vs-ReadOnly Visual Grammar ("دکمه در برابر برچسب ثابت"):**
+  - Read-only indicators, dates, KPI summary cards, and status badges MUST be serene and borderless (soft tonal fill or subtle dot+text, never button-like bordered capsules).
+  - Interactive buttons, segmented toggles, and expandable/navigable rows MUST use clear elevated/filled `Surface` containers with directional or action icons (`ChevronLeft`, `ExpandMore`/`ExpandLess`, `Mic`, `SwapVert`, `Sms`) and comfortable touch height (`>= 42–48.dp`).
 - **Native Typography:** Exclusively use bundled Persian fonts (`IRANSansX`, `IRANYekanX`, `Dana`, `Peyda`) and Persian digits via `PersianNumberUtils`.
 
 ### P4 — Strategic Growth & New Capabilities
@@ -119,26 +129,29 @@ Because AI Studio's **Custom instructions** panel is updated manually by the use
 
 ### Protected Approved Surfaces (Do NOT Redesign Unless Explicitly Requested)
 - **Compact 2-Column Transaction Details & Edit Modal (`TransactionDetailAndEditBottomSheet`):** Explicitly approved by user (`10batch_19`). Preserve its compact non-scrolling 2-column layout and visual hierarchy.
-- **Tactile Voice Overlay Bottom Sheet (`VoiceOverlayBottomSheet` — v2.2 Redesign):** Unified voice wave header, zero hint clutter, zero minus signs, per-card destination/date pills (`تراکنش • پریروز` / `واریز آینده • فردا` / `تعهد • برنامه خرید`), filled Material 3 `پرداختی | دریافتی` (or `بدهی | طلب`) toggles with directional icons, elevated Saffron `تغییر واحد به میلیون / هزار` button, high-contrast inputs, and clean non-overlapping `OrosiAmountText` footer KPIs.
+- **Tactile Voice Overlay Bottom Sheet (`VoiceOverlayBottomSheet` — v2.3):** Unified voice wave header, zero hint clutter, zero minus signs, calm borderless destination/date badges, filled Material 3 `پرداختی | دریافتی` (or `بدهی | طلب`) toggles, BiDi-safe elevated Saffron `تغییر واحد به میلیون / هزار` button (`×۱۰۰۰`/`÷۱۰۰۰`), live **Bank SMS Auto-Match / 1-Tap Link & Unlink Strip (`VoiceBankSmsMatchStrip`)**, high-contrast inputs, and clean non-overlapping `OrosiAmountText` footer KPIs.
 - **Interactive Accounts Management (`AccountsScreen` + `EditBankAccountBottomSheet`):** Tap any bank card to edit name/balance/custom SMS senders, trigger single-bank SMS rescan, or delete account.
-- **Modern Payday-Cycle Balance Sheet (`HeroMathBreakdownBottomSheet` — v2.2 Redesign):** Separated 2-column Inflow / Outflow KPI cards with stacked `OrosiAmountText`, structured breakdown rows (Commitments, excluded Self-Transfers with pair badge, highlighted Net Cashflow + truthful dynamic status badge), and clean Daily Safe Budget hero strip.
+- **Modern Payday-Cycle Balance Sheet (`HeroMathBreakdownBottomSheet` — v2.3):** Calm borderless cycle subtitle & dot+text status indicator, borderless 2-column Inflow/Outflow KPI cards with stacked `OrosiAmountText`, interactive **Inline Expandable Self-Transfer Pair Inspector** (`از <مبدأ> ← به <مقصد>`, Jalali date/time, amount), highlighted Net Cashflow, and clean Daily Safe Budget hero strip.
 
-### Current Version Baseline (`v2.2`)
-- **RTL Typography & Zero-Overlap Rendering (`OrosiAmountText`):**
-  - Reusable BiDi-safe `OrosiAmountText` adopted across `DashboardScreen`, `TransactionsScreen`, `HeroMathBreakdownBottomSheet`, and `VoiceOverlayBottomSheet`, permanently eliminating RTL `"تومان"` overlap on large Iranian numbers.
+### Current Version Baseline (`v2.3`)
+- **Batch Voice-to-Bank-SMS Auto-Matching (`OrosiVoiceSmsMatcher` + `OrosiFinanceRepository`):**
+  - 1-to-1 greedy exact-amount matching on target Jalali day (`eventDayOffset`) + direction (`EXPENSE`/`INCOME`), with 1-tap unlink (`ثبت نقدی جدا`) and 1-tap closest same-day bank SMS suggestion (`اتصال به پیامک ...`) for unmatched items.
+  - Updates matched bank SMS rows in-place (`title`, `purpose`, `isUntagged = false`) while preserving bank amount/name and zero duplicate records.
+- **Zero-Bloat Packaging, Instant Cold Launch & 120Hz Flat-HWUI Lists (`build.gradle.kts`, `themes.xml`, `BankLogoAvatar`, `DashboardScreen`, `TransactionsScreen`):**
+  - Gradle `copyBankLogosAsset` task packages ONLY the 520 KB bank logos zip (excluding 78 MB of review `.mp4` videos from APK assets).
+  - Dark lapis `#09131C` launch `windowBackground`, `300ms` splash, zero redundant `SideEffect`s, pre-cached `BitmapPainter`s bypassing Snapshot `loadVersion` once ready, pre-formatted `@Immutable` row UI models, halved row LayoutNodes, and flat borderless row surfaces (eliminating per-frame `drawBehind` stroke tessellation).
+- **Calm Interactive-vs-ReadOnly Visual Grammar & BiDi Isolation (`OrosiAmountText`, `PersianNumberUtils`):**
+  - Clear visual separation between serene borderless read-only cards/badges and tactile filled/icon-led clickable actions (`مشاهده ترازنامه ماه حقوقی` hero footer strip, `ChevronLeft` section actions, expandable self-transfer row).
+  - Strict LTR BiDi isolation for `OrosiAmountText`, `+` income prefixes, and `×۱۰۰۰`/`÷۱۰۰۰` scale toggle labels (`formatScaleToggleLabel`).
 - **SMS Engine (`JibemanSmsEngine` + `OrosiFinanceRepository`):**
   - `O(1)` memoized `resolveBank` + 2-query SQL scan (incremental `< 50ms` on resume; metadata-only historical scan for dormant banks like Sepah).
   - Strict balance authority (`parsed.balance` > `extractBalanceRial`; Blu Box / piggybank / loan / failed-tx rejected; timestamp-monotone flush; `full_inbox_balance_pass_v2`).
   - Both `EXPENSE` (`بگو بابت چی؟`) and `INCOME` (`بگو از کجا اومد؟`) bank SMS rows default to `isUntagged = true`.
-- **Startup, Cashflow & 120Hz Performance (`OrosiCashflowAnalyzer` + `BankLogoAvatar` + Lists):**
-  - Async `Dispatchers.IO` bank logo decoding downscaled to `96×96 px` with reactive `loadVersion` (eliminates cold-launch black screen).
-  - Zero-allocation `PersianNumberUtils.formatGroupedPersianLong`, pre-computed `@Immutable` row UI models, single-pass `drawBehind` card fill+stroke, stabilized `MainActivity` callbacks, and clipped `DashCardShape28` glow on `JibemanFinancialStatusHeroCard`.
-  - Payday-cycle balance sheet with automatic ±10-minute cross-bank self-transfer exclusion (`OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle`).
 - **Voice NLU Engine (`PersianVoiceSlangParserEngine`):**
   - Multi-clause splitting (conjunction, asyndetic with forward temporal anchor pulling, and contrast `ولی`/`اما`), mixed income/expense, negation/cancellation filtering, mid-speech self-correction, observation back-reference, brand number preservation (`سایت ۵۰۴۰`), dative compounds (`کمک به فقیر`), 1st-person sales (`فروش گوجه`), leftover/kept balance commentary filtering, colloquial Iranian million/thousand scale disambiguation (including durable goods & follow-up inflows), past relative dates (`دیروز` / `پریروز` -> real Jalali date), collected receivable income (`طلبم رو گرفتم`), and automatic routing of future debt/receivable/expected inflows (`واریز آینده`)/planned purchases (`برنامه خرید`) into `تعهدات`.
-- **Test Baseline:** 31 unit test suites + 45/45 regression tests in `OrosiRegressionSuite.kt` passing 100%.
+- **Test Baseline:** 33 unit test suites + 45/45 regression tests in `OrosiRegressionSuite.kt` passing 100%.
 
 ### Active PM Roadmap & Strategic Opportunities (Suggest Proactively When Relevant)
 - **Category & Monthly Spending Breakdown:** Visual category breakdown inside the current payday cycle (excluding self-transfers) so the user immediately sees where their money goes.
 - **Recurring Commitments Intelligence:** Automatically linking bank SMS installment/bill payments to active `وام و قسط` and `چک صیادی` commitments.
-- **One-Tap Self-Transfer Review:** Optional expandable list inside the balance sheet modal showing which exact transfer pairs were auto-excluded, with a manual override toggle if needed.
+- **Manual Self-Transfer Override Toggle:** Allow toggling individual auto-excluded transfer pairs back into regular income/expense inside the expandable balance sheet inspector if desired.

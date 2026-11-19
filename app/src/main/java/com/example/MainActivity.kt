@@ -121,12 +121,6 @@ class MainActivity : ComponentActivity() {
             isAppearanceLightNavigationBars = false
         }
         setContent {
-            SideEffect {
-                WindowCompat.getInsetsController(window, window.decorView).apply {
-                    isAppearanceLightStatusBars = false
-                    isAppearanceLightNavigationBars = false
-                }
-            }
             val viewModel: OrosiViewModel = viewModel()
             val uiState by viewModel.uiState.collectAsStateWithLifecycle()
             MyApplicationTheme(
@@ -154,7 +148,7 @@ fun OrosiFinanceApp(
         com.example.ui.components.JibemanAssetLogoCache.preloadAsync(context)
     }
     LaunchedEffect(Unit) {
-        delay(600L)
+        delay(300L)
         showSplashIntro = false
     }
 
@@ -339,6 +333,13 @@ fun OrosiFinanceApp(
             val onOpenTransactionsTab = remember(viewModel) { { viewModel.navigateTo(OrosiScreen.TRANSACTIONS) } }
             val onChangeMonth = remember(viewModel) { { delta: Int -> viewModel.changeSelectedMonth(delta) } }
             val onBackToHome = remember(viewModel) { { viewModel.navigateTo(OrosiScreen.HOME) } }
+            val onAddVoiceClick = remember(voicePermissionLauncher) {
+                {
+                    voicePermissionLauncher.launch(
+                        arrayOf(Manifest.permission.RECORD_AUDIO)
+                    )
+                }
+            }
 
             Crossfade(
                 targetState = uiState.currentScreen,
@@ -358,11 +359,7 @@ fun OrosiFinanceApp(
                             onToggleAccountTankhah = onToggleAccountTankhah,
                             onOpenAccountsTab = onOpenAccountsTab,
                             onHeroCardClick = onHeroCardClick,
-                            onAddVoiceClick = {
-                                voicePermissionLauncher.launch(
-                                    arrayOf(Manifest.permission.RECORD_AUDIO)
-                                )
-                            },
+                            onAddVoiceClick = onAddVoiceClick,
                             onTransactionClick = onTransactionClick,
                             onUntaggedMicClick = onUntaggedMicClick,
                             onDeleteTransaction = onDeleteTransaction,
@@ -480,6 +477,12 @@ fun OrosiFinanceApp(
             },
             onToggleSingleScale = {
                 viewModel.onToggleSingleVoiceScale()
+            },
+            onSetSingleMatchedBankTx = { txId ->
+                viewModel.onSetSingleMatchedBankTx(txId)
+            },
+            onSetMultiItemMatchedBankTx = { idx, txId ->
+                viewModel.onSetMultiItemMatchedBankTx(idx, txId)
             },
             onSimulateVoiceRecord = { viewModel.triggerVoiceSimulation(null) },
             onConfirmVoiceEntry = { viewModel.confirmVoiceEntry() },

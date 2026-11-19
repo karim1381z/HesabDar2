@@ -11,10 +11,13 @@ import com.example.data.local.TransactionEntity
 import com.example.data.repository.OrosiFinanceRepository
 import com.example.domain.BankSmsParserEngine
 import com.example.domain.JalaliCalendarUtils
+import com.example.domain.OrosiVoiceSmsMatcher
 import com.example.domain.ParsedSmsResult
 import com.example.domain.ParsedVoiceExpense
 import com.example.domain.PersianNumberUtils
 import com.example.domain.PersianVoiceSlangParserEngine
+import com.example.domain.UntaggedSmsCandidate
+import com.example.domain.VoiceSmsMatchResult
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -59,7 +62,11 @@ data class VoiceUiState(
     val commitmentKind: String? = null,
     val dueDateHint: String = "",
     val eventDayOffset: Int = 0,
-    val commitmentSubLabel: String = ""
+    val commitmentSubLabel: String = "",
+    val singleAutoMatch: VoiceSmsMatchResult? = null,
+    val singleMatchedBankTxId: Long? = null,
+    val multiAutoMatches: List<VoiceSmsMatchResult> = emptyList(),
+    val multiMatchedBankTxIds: List<Long?> = emptyList()
 )
 
 data class OrosiUiState(
@@ -579,6 +586,80 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
         parseAndUpdateVoiceState(newSpeech, currentTarget)
     }
 
+    private fun collectUntaggedBankSmsCandidates(): List<UntaggedSmsCandidate> {
+        return uiState.value.transactions
+            .asSequence()
+            .filter { tx ->
+                tx.isUntagged &&
+                    tx.totalAmountToman > 0L &&
+                    (tx.rawSmsBody.isNotBlank() ||
+                        (tx.shortBankName != "نقدی / دستی" && tx.shortBankName != "بانک" && tx.shortBankName != "تراکنش صوتی"))
+            }
+            .map { tx ->
+                UntaggedSmsCandidate(
+                    id = tx.id,
+                    bankName = tx.shortBankName,
+                    amountToman = tx.totalAmountToman,
+                    isIncome = tx.type == "INCOME",
+                    timestamp = tx.timestamp,
+                    jalaliDate = tx.jalaliDate,
+                    timeStr = tx.timeStr,
+                    cardInfo = tx.cardInfo
+                )
+            }
+            .toList()
+    }
+
+    private fun computeSingleMatch(
+        amountToman: Long,
+        isIncome: Boolean,
+        commitmentKind: String?,
+        eventDayOffset: Int
+    ): VoiceSmsMatchResult? {
+        if (commitmentKind != null || amountToman <= 0L) return null
+        val probe = ParsedVoiceExpense(
+            recognizedSpeech = "",
+            totalAmountToman = amountToman,
+            userShareToman = amountToman,
+            dongAmountToman = 0L,
+            dongFriendName = "",
+            storeName = "",
+            purposeCategory = "probe",
+            cardLabel = "",
+            isIncome = isIncome,
+            commitmentKind = null,
+            eventDayOffset = eventDayOffset
+        )
+        return OrosiVoiceSmsMatcher.matchBatch(
+            items = listOf(probe),
+            untaggedBankSms = collectUntaggedBankSmsCandidates()
+        ).firstOrNull()
+    }
+
+    fun onSetSingleMatchedBankTx(txId: Long?) {
+        if (_voiceState.value.targetUntaggedTransaction != null) return
+        _voiceState.value = _voiceState.value.copy(singleMatchedBankTxId = txId)
+    }
+
+    fun onSetMultiItemMatchedBankTx(index: Int, txId: Long?) {
+        if (_voiceState.value.targetUntaggedTransaction != null) return
+        val currentIds = _voiceState.value.multiMatchedBankTxIds.toMutableList()
+        while (currentIds.size < _voiceState.value.parsedMultiItems.size) {
+            currentIds.add(null)
+        }
+        if (index !in currentIds.indices) return
+        // Ensure 1-to-1 claim uniqueness if user manually links a bank SMS already linked to another card
+        if (txId != null) {
+            for (i in currentIds.indices) {
+                if (i != index && currentIds[i] == txId) {
+                    currentIds[i] = null
+                }
+            }
+        }
+        currentIds[index] = txId
+        _voiceState.value = _voiceState.value.copy(multiMatchedBankTxIds = currentIds)
+    }
+
     fun onVoiceManualAmountChanged(newAmountStr: String) {
         val targetTx = _voiceState.value.targetUntaggedTransaction
         if (targetTx != null) return // Existing bank SMS amount is locked
@@ -587,11 +668,20 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             ?: PersianVoiceSlangParserEngine.parseSpokenPersianAmountToman(newAmountStr)
         val safeDong = _voiceState.value.dongAmountToman.coerceIn(0L, numericVal)
         val userShare = (numericVal - safeDong).coerceAtLeast(0L)
-        _voiceState.value = _voiceState.value.copy(
+        val cur = _voiceState.value
+        val matchRes = computeSingleMatch(
+            amountToman = numericVal,
+            isIncome = cur.isIncome,
+            commitmentKind = cur.commitmentKind,
+            eventDayOffset = cur.eventDayOffset
+        )
+        _voiceState.value = cur.copy(
             manualAmountText = formattedPersian,
             totalAmountToman = numericVal,
             dongAmountToman = safeDong,
-            userShareToman = userShare
+            userShareToman = userShare,
+            singleAutoMatch = matchRes,
+            singleMatchedBankTxId = matchRes?.matchedCandidate?.id
         )
     }
 
@@ -610,11 +700,21 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         val updatedSingleKind = current.commitmentKind?.let { if (isIncome) "RECEIVABLE" else "DEBT" }
+        val singleMatch = if (current.targetUntaggedTransaction == null && updatedMulti.isEmpty()) {
+            computeSingleMatch(current.totalAmountToman, isIncome, updatedSingleKind, current.eventDayOffset)
+        } else null
+        val multiMatches = if (current.targetUntaggedTransaction == null && updatedMulti.size > 1) {
+            OrosiVoiceSmsMatcher.matchBatch(updatedMulti, collectUntaggedBankSmsCandidates())
+        } else emptyList()
         _voiceState.value = current.copy(
             isIncome = isIncome,
             hasUserOverriddenIncomeType = true,
             parsedMultiItems = updatedMulti,
-            commitmentKind = updatedSingleKind
+            commitmentKind = updatedSingleKind,
+            singleAutoMatch = singleMatch,
+            singleMatchedBankTxId = singleMatch?.matchedCandidate?.id,
+            multiAutoMatches = multiMatches,
+            multiMatchedBankTxIds = multiMatches.map { it.matchedCandidate?.id }
         )
     }
 
@@ -635,9 +735,14 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             commitmentKind = existingItem.commitmentKind?.let { if (isIncome) "RECEIVABLE" else "DEBT" }
         )
         val combinedNote = PersianVoiceSlangParserEngine.formatCombinedMultiVoiceNote(currentList)
+        val multiMatches = if (_voiceState.value.targetUntaggedTransaction == null) {
+            OrosiVoiceSmsMatcher.matchBatch(currentList, collectUntaggedBankSmsCandidates())
+        } else emptyList()
         _voiceState.value = _voiceState.value.copy(
             parsedMultiItems = currentList,
-            purposeCategory = combinedNote
+            purposeCategory = combinedNote,
+            multiAutoMatches = multiMatches,
+            multiMatchedBankTxIds = multiMatches.map { it.matchedCandidate?.id }
         )
     }
 
@@ -698,6 +803,19 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             null
         }
+        val multiMatches = if (targetTx == null) {
+            OrosiVoiceSmsMatcher.matchBatch(currentList, collectUntaggedBankSmsCandidates())
+        } else {
+            emptyList()
+        }
+        val preservedIds = _voiceState.value.multiMatchedBankTxIds
+        val updatedIds = multiMatches.mapIndexed { i, match ->
+            if (i == index) {
+                match.matchedCandidate?.id
+            } else {
+                preservedIds.getOrNull(i) ?: match.matchedCandidate?.id
+            }
+        }
         _voiceState.value = _voiceState.value.copy(
             parsedMultiItems = currentList,
             purposeCategory = combinedNote,
@@ -707,7 +825,9 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             hasBankAmountMismatch = mismatchAmount != null,
             conflictingSpokenAmountToman = mismatchAmount ?: 0L,
             hasSummaryTotalMismatch = summaryMismatch != null,
-            statedSummaryHeaderToman = summaryMismatch ?: 0L
+            statedSummaryHeaderToman = summaryMismatch ?: 0L,
+            multiAutoMatches = multiMatches,
+            multiMatchedBankTxIds = updatedIds
         )
     }
 
@@ -784,6 +904,21 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             emptyList()
         }
 
+        val resolvedSingleCommitmentKind = if (targetTx == null && effectiveMultiItems.isEmpty()) parsed.commitmentKind else null
+        val resolvedSingleDayOffset = if (targetTx == null && effectiveMultiItems.isEmpty()) parsed.eventDayOffset else 0
+
+        val candidates = if (targetTx == null) collectUntaggedBankSmsCandidates() else emptyList()
+        val multiMatches = if (targetTx == null && effectiveMultiItems.size > 1) {
+            OrosiVoiceSmsMatcher.matchBatch(effectiveMultiItems, candidates)
+        } else {
+            emptyList()
+        }
+        val singleMatch = if (targetTx == null && effectiveMultiItems.isEmpty()) {
+            computeSingleMatch(effectiveTotal, resolvedIsIncome, resolvedSingleCommitmentKind, resolvedSingleDayOffset)
+        } else {
+            null
+        }
+
         _voiceState.value = _voiceState.value.copy(
             recognizedText = speech,
             manualAmountText = effectiveManualText,
@@ -802,10 +937,14 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             hasUserOverriddenIncomeType = keepUserOverride,
             hasSummaryTotalMismatch = summaryMismatchAmount != null,
             statedSummaryHeaderToman = summaryMismatchAmount ?: 0L,
-            commitmentKind = if (targetTx == null && effectiveMultiItems.isEmpty()) parsed.commitmentKind else null,
+            commitmentKind = resolvedSingleCommitmentKind,
             dueDateHint = if (targetTx == null && effectiveMultiItems.isEmpty()) parsed.dueDateHint else "",
-            eventDayOffset = if (targetTx == null && effectiveMultiItems.isEmpty()) parsed.eventDayOffset else 0,
-            commitmentSubLabel = if (targetTx == null && effectiveMultiItems.isEmpty()) parsed.commitmentSubLabel else ""
+            eventDayOffset = resolvedSingleDayOffset,
+            commitmentSubLabel = if (targetTx == null && effectiveMultiItems.isEmpty()) parsed.commitmentSubLabel else "",
+            singleAutoMatch = singleMatch,
+            singleMatchedBankTxId = singleMatch?.matchedCandidate?.id,
+            multiAutoMatches = multiMatches,
+            multiMatchedBankTxIds = multiMatches.map { it.matchedCandidate?.id }
         )
     }
 
@@ -864,17 +1003,26 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             if (targetTx == null && activeMultiItems.size > 1) {
-                repository.confirmMultiVoiceExpenses(activeMultiItems)
-                val commCount = activeMultiItems.count { it.isCommitment }
-                val txCount = activeMultiItems.size - commCount
-                val combinedSummary = PersianVoiceSlangParserEngine.formatCombinedMultiVoiceNote(activeMultiItems)
-                val bannerMsg = when {
-                    commCount == activeMultiItems.size ->
-                        "${PersianNumberUtils.toPersianDigits(commCount.toString())} تعهد در بخش بدهی و طلب ثبت شد ✓"
-                    commCount > 0 ->
-                        "${PersianNumberUtils.toPersianDigits(txCount.toString())} تراکنش و ${PersianNumberUtils.toPersianDigits(commCount.toString())} تعهد ثبت شد ✓"
-                    else ->
-                        "${PersianNumberUtils.toPersianDigits(activeMultiItems.size.toString())} تراکنش مجزا ثبت شد: $combinedSummary ✓"
+                val itemsWithMatches = activeMultiItems.mapIndexed { idx, item ->
+                    val linkedId = if (v.parsedMultiItems.size > 1) v.multiMatchedBankTxIds.getOrNull(idx) else null
+                    item.copy(matchedBankTxId = if (item.isCommitment) null else linkedId)
+                }
+                val saveSummary = repository.confirmMultiVoiceExpenses(itemsWithMatches)
+                val parts = mutableListOf<String>()
+                if (saveSummary.taggedSmsCount > 0) {
+                    parts.add("${PersianNumberUtils.toPersianDigits(saveSummary.taggedSmsCount.toString())} پیامک بانکی عنوان‌گذاری شد")
+                }
+                if (saveSummary.newCashTxCount > 0) {
+                    parts.add("${PersianNumberUtils.toPersianDigits(saveSummary.newCashTxCount.toString())} تراکنش نقدی ثبت شد")
+                }
+                if (saveSummary.commitmentCount > 0) {
+                    parts.add("${PersianNumberUtils.toPersianDigits(saveSummary.commitmentCount.toString())} تعهد ثبت شد")
+                }
+                val bannerMsg = if (parts.isNotEmpty()) {
+                    parts.joinToString(" • ") + " ✓"
+                } else {
+                    val combinedSummary = PersianVoiceSlangParserEngine.formatCombinedMultiVoiceNote(activeMultiItems)
+                    "${PersianNumberUtils.toPersianDigits(activeMultiItems.size.toString())} تراکنش مجزا ثبت شد: $combinedSummary ✓"
                 }
                 _showVoiceOverlaySheet.value = false
                 _voiceState.value = VoiceUiState()
@@ -946,10 +1094,19 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
                 commitmentSubLabel = if (effectiveCommitmentKind != null) v.commitmentSubLabel.ifBlank { parsedFromSpeech.commitmentSubLabel } else ""
             )
 
-            repository.confirmVoiceExpense(finalParsed, targetTx?.id)
+            val effectiveTargetBankTxId = targetTx?.id
+                ?: if (effectiveCommitmentKind == null) v.singleMatchedBankTxId else null
+            val linkedSingleCandidate = if (targetTx == null && effectiveTargetBankTxId != null) {
+                v.singleAutoMatch?.matchedCandidate?.takeIf { it.id == effectiveTargetBankTxId }
+                    ?: v.singleAutoMatch?.suggestedCandidate?.takeIf { it.id == effectiveTargetBankTxId }
+            } else null
+
+            repository.confirmVoiceExpense(finalParsed, effectiveTargetBankTxId)
             val msg = if (finalParsed.isCommitment) {
                 val kindLabel = if (finalParsed.commitmentKind == "RECEIVABLE") "طلب" else "بدهی"
                 "$kindLabel «${finalParsed.purposeCategory}» (${PersianNumberUtils.formatToman(finalTotalAmount, true)}) در بخش تعهدات ثبت شد ✓"
+            } else if (linkedSingleCandidate != null) {
+                "پیامک بانک ${linkedSingleCandidate.bankName} با عنوان «${finalParsed.purposeCategory}» تکمیل شد ✓"
             } else if (finalParsed.dongAmountToman > 0L && finalParsed.dongFriendName.isNotBlank()) {
                 "ثبت شد! «${finalParsed.purposeCategory}» — فقط سهم شما (${PersianNumberUtils.formatToman(finalParsed.userShareToman, true)}) کسر شد."
             } else if (finalParsed.isIncome) {

@@ -6,8 +6,11 @@ import com.example.domain.CashflowTxSnapshot
 import com.example.domain.JalaliCalendarUtils
 import com.example.domain.JibemanSmsEngine
 import com.example.domain.OrosiCashflowAnalyzer
+import com.example.domain.OrosiVoiceSmsMatcher
+import com.example.domain.ParsedVoiceExpense
 import com.example.domain.PersianNumberUtils
 import com.example.domain.PersianVoiceSlangParserEngine
+import com.example.domain.UntaggedSmsCandidate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -952,6 +955,130 @@ class ExampleUnitTest {
         assertEquals("۱,۰۰۰,۰۰۰,۰۰۰", PersianNumberUtils.formatGroupedPersianLong(1_000_000_000L))
         assertEquals("۴۲,۶۶۶,۸۷۷ تومان", PersianNumberUtils.formatToman(42_666_877L, showUnit = true))
         assertEquals("\u2066\u200E+۱,۱۵۲,۲۰۶\u2069 تومان", PersianNumberUtils.formatIncomeToman(1_152_206L, showUnit = true))
+    }
+
+    @Test
+    fun testBatchVoiceSmsAutoMatcherExactDuplicateYesterdayDirectionCommitmentAndSuggestion() {
+        val (gy, gm, gd) = JalaliCalendarUtils.jalaliToGregorian(1405, 8, 28)
+        val cal = java.util.Calendar.getInstance().apply {
+            set(gy, gm - 1, gd, 14, 30, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val todayMs = cal.timeInMillis
+        val yesterdayMs = todayMs - 86_400_000L
+        val todayDate = JalaliCalendarUtils.timestampToJalali(todayMs).dateWithYear
+        val yesterdayDate = JalaliCalendarUtils.timestampToJalali(yesterdayMs).dateWithYear
+
+        val untaggedSms = listOf(
+            UntaggedSmsCandidate(101L, "بلو", 35_000L, false, todayMs - 600_000L, todayDate, "۱۴:۲۰", "کارت بلو"),
+            UntaggedSmsCandidate(102L, "سپه", 35_000L, false, todayMs - 1_200_000L, todayDate, "۱۴:۱۰", "کارت سپه"),
+            UntaggedSmsCandidate(103L, "پاسارگاد", 120_000L, true, todayMs - 900_000L, todayDate, "۱۴:۱۵", "کارت پاسارگاد"),
+            UntaggedSmsCandidate(104L, "ملت", 52_000L, false, todayMs - 300_000L, todayDate, "۱۴:۲۵", "کارت ملت"),
+            UntaggedSmsCandidate(105L, "بلو", 70_000L, false, yesterdayMs, yesterdayDate, "۱۴:۳۰", "کارت بلو")
+        )
+
+        fun sampleVoiceItem(
+            amount: Long,
+            purpose: String,
+            isIncome: Boolean = false,
+            eventDayOffset: Int = 0,
+            commitmentKind: String? = null
+        ) = ParsedVoiceExpense(
+            recognizedSpeech = purpose,
+            totalAmountToman = amount,
+            userShareToman = amount,
+            dongAmountToman = 0L,
+            dongFriendName = "",
+            storeName = "نقدی / دستی",
+            purposeCategory = purpose,
+            cardLabel = "نقدی / دستی",
+            isIncome = isIncome,
+            commitmentKind = commitmentKind,
+            eventDayOffset = eventDayOffset
+        )
+
+        val spokenItems = listOf(
+            // 0: Today 35k expense -> matches newest 35k SMS (101)
+            sampleVoiceItem(35_000L, "نانوایی", isIncome = false),
+            // 1: Second today 35k expense -> matches second distinct 35k SMS (102)
+            sampleVoiceItem(35_000L, "قهوه", isIncome = false),
+            // 2: Today 120k income -> matches 120k income SMS (103)
+            sampleVoiceItem(120_000L, "تسویه علی", isIncome = true),
+            // 3: Yesterday 70k expense -> matches yesterday's 70k SMS (105)
+            sampleVoiceItem(70_000L, "میوه", isIncome = false, eventDayOffset = -1),
+            // 4: Future commitment with same amount as an SMS -> MUST NEVER match!
+            sampleVoiceItem(52_000L, "بدهی", isIncome = false, commitmentKind = "DEBT"),
+            // 5: Today 50k expense (slightly off from 52k Mellat SMS) -> no exact match, suggests 104!
+            sampleVoiceItem(50_000L, "سوپرمارکت", isIncome = false),
+            // 6: Today 52k INCOME -> direction mismatch against 52k EXPENSE SMS (104), so neither matched nor suggested!
+            sampleVoiceItem(52_000L, "هدیه", isIncome = true)
+        )
+
+        val matches = OrosiVoiceSmsMatcher.matchBatch(spokenItems, untaggedSms, nowMillis = todayMs)
+        assertEquals(7, matches.size)
+
+        assertEquals(101L, matches[0].matchedCandidate?.id)
+        assertEquals(true, matches[0].isExactAutoMatch)
+
+        assertEquals(102L, matches[1].matchedCandidate?.id)
+        assertEquals(true, matches[1].isExactAutoMatch)
+
+        assertEquals(103L, matches[2].matchedCandidate?.id)
+        assertEquals(true, matches[2].isExactAutoMatch)
+
+        assertEquals(105L, matches[3].matchedCandidate?.id)
+        assertEquals(true, matches[3].isExactAutoMatch)
+
+        assertNull(matches[4].matchedCandidate)
+        assertNull(matches[4].suggestedCandidate)
+
+        assertNull(matches[5].matchedCandidate)
+        assertEquals(104L, matches[5].suggestedCandidate?.id)
+        assertEquals(false, matches[5].isExactAutoMatch)
+
+        assertNull(matches[6].matchedCandidate)
+        assertNull(matches[6].suggestedCandidate)
+    }
+
+    @Test
+    fun testSelfTransferPairDetailsAndBidiScaleToggleLabels() {
+        val (gy, gm, gd) = JalaliCalendarUtils.jalaliToGregorian(1405, 8, 28)
+        val cal = java.util.Calendar.getInstance().apply {
+            set(gy, gm - 1, gd, 15, 10, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val nowMs = cal.timeInMillis
+
+        val summary = OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle(
+            transactions = listOf(
+                CashflowTxSnapshot(1L, "EXPENSE", 3_500_000L, 3_500_000L, bankName = "پاسارگاد", timestamp = nowMs),
+                CashflowTxSnapshot(2L, "INCOME", 3_500_000L, 3_500_000L, bankName = "بلو", timestamp = nowMs + 90_000L)
+            ),
+            paydayStartDay = 1,
+            reservedCommitmentsToman = 0L,
+            nowMillis = nowMs + 120_000L
+        )
+        assertEquals(1, summary.excludedSelfTransferPairs)
+        assertEquals(1, summary.excludedSelfTransferDetails.size)
+        val detail = summary.excludedSelfTransferDetails.first()
+        assertEquals("پاسارگاد", detail.fromBankName)
+        assertEquals("بلو", detail.toBankName)
+        assertEquals(3_500_000L, detail.amountToman)
+        assertEquals(1L, detail.expenseTxId)
+        assertEquals(2L, detail.incomeTxId)
+        assertEquals(true, detail.dateTimeLabel.isNotBlank())
+
+        // BiDi LTR isolation on scale toggle labels and isolated amount runs
+        assertEquals(
+            "تغییر واحد به میلیون (\u2066\u200E×۱۰۰۰\u2069)",
+            PersianNumberUtils.formatScaleToggleLabel(isThousandScale = true)
+        )
+        assertEquals(
+            "تغییر واحد به هزار (\u2066\u200E÷۱۰۰۰\u2069)",
+            PersianNumberUtils.formatScaleToggleLabel(isThousandScale = false)
+        )
+        assertEquals("\u2066\u200E+۵۰۰,۰۰۰\u2069", PersianNumberUtils.formatIsolatedAmountRun(500_000L, isIncome = true))
+        assertEquals("\u2066۵۰۰,۰۰۰\u2069", PersianNumberUtils.formatIsolatedAmountRun(500_000L, isIncome = false))
     }
 
     @Test

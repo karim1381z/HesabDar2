@@ -36,6 +36,7 @@ import android.graphics.BitmapFactory
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.painter.BitmapPainter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
@@ -44,11 +45,15 @@ import java.util.zip.ZipInputStream
 /**
  * In-memory cache that asynchronously scans `context.assets` on `Dispatchers.IO`,
  * decodes & downscales `ic_bank_*.png` icons to 96x96 px (matching 44.dp at xhdpi/xxhdpi),
- * and publishes a reactive [loadVersion] so composables never block the main thread with ZIP I/O.
+ * pre-builds [BitmapPainter] instances for zero-allocation 120Hz scrolling, and publishes
+ * a reactive [loadVersion] only until initial load completes.
  */
 object JibemanAssetLogoCache {
     @Volatile
     private var cachedLogos: Map<String, ImageBitmap>? = null
+
+    @Volatile
+    private var cachedPainters: Map<String, BitmapPainter>? = null
     private val isLoading = AtomicBoolean(false)
 
     // Reactive counter incremented once async IO decoding finishes so visible avatars recompose cleanly.
@@ -174,16 +179,28 @@ object JibemanAssetLogoCache {
                 }
             } catch (_: Exception) {
             }
+            val painters = LinkedHashMap<String, BitmapPainter>(result.size)
+            for ((k, bmp) in result) {
+                painters[k] = BitmapPainter(bmp, filterQuality = FilterQuality.Low)
+            }
             cachedLogos = result
+            cachedPainters = painters
             return result
         }
     }
 
     private val resolvedKeyCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
+    fun isReady(): Boolean = cachedPainters != null
+
     fun peekCachedLogo(logoKey: String?): ImageBitmap? {
         if (logoKey.isNullOrEmpty()) return null
         return cachedLogos?.get(logoKey)
+    }
+
+    fun peekCachedPainter(logoKey: String?): BitmapPainter? {
+        if (logoKey.isNullOrEmpty()) return null
+        return cachedPainters?.get(logoKey)
     }
 
     fun resolveBankLogoKey(bankName: String): String? {
@@ -281,17 +298,19 @@ fun BankLogoAvatar(
     size: Dp = 44.dp
 ) {
     val logoKey = remember(bankName) { JibemanAssetLogoCache.resolveBankLogoKey(bankName) }
-    val loadVer = JibemanAssetLogoCache.loadVersion
-    val pngBitmap: ImageBitmap? = remember(logoKey, loadVer) {
-        if (logoKey == null) null else JibemanAssetLogoCache.peekCachedLogo(logoKey)
+    // Once cachedPainters is populated, bypass Snapshot state subscription for zero-overhead 120Hz scrolling.
+    val cachedPainter = if (JibemanAssetLogoCache.isReady()) {
+        JibemanAssetLogoCache.peekCachedPainter(logoKey)
+    } else {
+        val loadVer = JibemanAssetLogoCache.loadVersion
+        remember(logoKey, loadVer) { JibemanAssetLogoCache.peekCachedPainter(logoKey) }
     }
 
-    if (pngBitmap != null) {
+    if (cachedPainter != null) {
         Image(
-            bitmap = pngBitmap,
+            painter = cachedPainter,
             contentDescription = "لوگوی بانک $bankName",
             contentScale = ContentScale.Fit,
-            filterQuality = FilterQuality.Low,
             modifier = modifier.size(size)
         )
     } else {
@@ -314,7 +333,6 @@ fun BankLogoAvatar(
                 modifier = modifier
                     .size(size)
                     .background(PersianLapis, CircleShape)
-                    .border(1.dp, OrosiHairline, CircleShape)
             ) {
                 Icon(
                     imageVector = if (isManualOrCash) Icons.Default.AccountBalanceWallet else Icons.Default.AccountBalance,

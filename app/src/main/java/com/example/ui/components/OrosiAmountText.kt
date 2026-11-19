@@ -44,10 +44,12 @@ fun OrosiAmountText(
     numberFontWeight: FontWeight? = null,
     unitFontWeight: FontWeight = FontWeight.Medium,
     unitSpacing: Dp = 4.dp,
-    stackedAlignment: Alignment.Horizontal = Alignment.Start
+    stackedAlignment: Alignment.Horizontal = Alignment.Start,
+    preformattedNumberRun: String? = null
 ) {
     val numberRun = when {
         hideAmount -> "****"
+        preformattedNumberRun != null -> preformattedNumberRun
         isIncome && amountToman > 0L -> "\u2066\u200E+${PersianNumberUtils.formatGroupedPersianLong(amountToman)}\u2069"
         else -> "\u2066${PersianNumberUtils.formatGroupedPersianLong(kotlin.math.abs(amountToman))}\u2069"
     }

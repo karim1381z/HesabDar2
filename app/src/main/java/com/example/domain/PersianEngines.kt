@@ -128,6 +128,31 @@ object PersianNumberUtils {
         }
     }
 
+    /**
+     * Pre-formats an LTR-isolated Persian amount run (without "تومان") for zero-allocation
+     * rendering inside 120Hz LazyColumn rows via [OrosiAmountText].
+     */
+    fun formatIsolatedAmountRun(amountToman: Long, isIncome: Boolean = false): String {
+        val grouped = formatGroupedPersianLong(kotlin.math.abs(amountToman))
+        return if (isIncome && amountToman > 0L) {
+            "\u2066\u200E+$grouped\u2069"
+        } else {
+            "\u2066$grouped\u2069"
+        }
+    }
+
+    /**
+     * Formats the voice scale toggle button text with explicit LTR isolation around the math
+     * operator so `×` and `÷` always sit to the LEFT of `۱۰۰۰` in RTL Persian layouts.
+     */
+    fun formatScaleToggleLabel(isThousandScale: Boolean): String {
+        return if (isThousandScale) {
+            "تغییر واحد به میلیون (\u2066\u200E×۱۰۰۰\u2069)"
+        } else {
+            "تغییر واحد به هزار (\u2066\u200E÷۱۰۰۰\u2069)"
+        }
+    }
+
     fun formatDecimal(value: Double, decimals: Int = 2): String {
         val pattern = if (decimals <= 0) "#" else "#." + "#".repeat(decimals)
         val symbols = DecimalFormatSymbols(Locale.US).apply {
@@ -537,6 +562,16 @@ enum class CashflowHealthStatus {
     DEFICIT
 }
 
+data class SelfTransferPairDetail(
+    val expenseTxId: Long,
+    val incomeTxId: Long,
+    val fromBankName: String,
+    val toBankName: String,
+    val amountToman: Long,
+    val timestamp: Long,
+    val dateTimeLabel: String
+)
+
 data class PaydayCashflowSummary(
     val cycleLabel: String,
     val totalIncomeToman: Long,
@@ -545,7 +580,8 @@ data class PaydayCashflowSummary(
     val excludedSelfTransferPairs: Int,
     val excludedSelfTransferTotalToman: Long,
     val netBalanceToman: Long,
-    val healthStatus: CashflowHealthStatus
+    val healthStatus: CashflowHealthStatus,
+    val excludedSelfTransferDetails: List<SelfTransferPairDetail> = emptyList()
 )
 
 /**
@@ -584,6 +620,7 @@ object OrosiCashflowAnalyzer {
         // Smart 1-to-1 greedy matching for internal self-transfers across distinct bank accounts within ±10 minutes
         val excludedIds = HashSet<Long>()
         val matchedIncomeIds = HashSet<Long>()
+        val selfTransferDetails = mutableListOf<SelfTransferPairDetail>()
         var selfTransferPairs = 0
         var selfTransferTotalToman = 0L
 
@@ -613,6 +650,18 @@ object OrosiCashflowAnalyzer {
                 matchedIncomeIds.add(bestIncome.id)
                 selfTransferPairs++
                 selfTransferTotalToman += exp.totalAmountToman
+                val jalali = JalaliCalendarUtils.timestampToJalali(exp.timestamp)
+                selfTransferDetails.add(
+                    SelfTransferPairDetail(
+                        expenseTxId = exp.id,
+                        incomeTxId = bestIncome.id,
+                        fromBankName = exp.bankName.trim(),
+                        toBankName = bestIncome.bankName.trim(),
+                        amountToman = exp.totalAmountToman,
+                        timestamp = exp.timestamp,
+                        dateTimeLabel = "${jalali.dateWithYear} • ${jalali.timeStr}"
+                    )
+                )
             }
         }
 
@@ -639,7 +688,8 @@ object OrosiCashflowAnalyzer {
             excludedSelfTransferPairs = selfTransferPairs,
             excludedSelfTransferTotalToman = selfTransferTotalToman,
             netBalanceToman = netBalance,
-            healthStatus = healthStatus
+            healthStatus = healthStatus,
+            excludedSelfTransferDetails = selfTransferDetails.sortedByDescending { it.timestamp }
         )
     }
 }
@@ -1372,7 +1422,8 @@ data class ParsedVoiceExpense(
     val commitmentKind: String? = null, // null = regular tx, "DEBT" = بدهی/برنامه خرید آینده, "RECEIVABLE" = طلب/درآمد آینده
     val dueDateHint: String = "",
     val eventDayOffset: Int = 0,        // e.g. -1 = دیروز/دیشب, -2 = پریروز
-    val commitmentSubLabel: String = "" // e.g. "برنامه خرید", "درآمد آینده", "بدهی", "طلب"
+    val commitmentSubLabel: String = "", // e.g. "برنامه خرید", "درآمد آینده", "بدهی", "طلب"
+    val matchedBankTxId: Long? = null   // Non-null when auto-matched / user-linked to an untagged bank SMS row
 ) {
     val title: String
         get() = purposeCategory
@@ -1382,6 +1433,116 @@ data class ParsedVoiceExpense(
 
     val isCommitment: Boolean
         get() = commitmentKind != null
+}
+
+/**
+ * Lightweight projection of an existing untagged bank SMS transaction used for
+ * batch voice auto-matching ("تطبیق خودکار ویس با پیامک‌های بانکی").
+ */
+data class UntaggedSmsCandidate(
+    val id: Long,
+    val bankName: String,
+    val amountToman: Long,
+    val isIncome: Boolean,
+    val timestamp: Long,
+    val jalaliDate: String,
+    val timeStr: String,
+    val cardInfo: String
+)
+
+/**
+ * Result of matching a single spoken voice item against untagged same-day bank SMS transactions.
+ * - [matchedCandidate]: exact amount + same Jalali day + same direction match (auto-linked by default).
+ * - [suggestedCandidate]: closest remaining unclaimed same-day bank SMS of the same direction when no exact
+ *   match exists (so user saves as cash by default OR links to the closest bank SMS with 1 tap).
+ */
+data class VoiceSmsMatchResult(
+    val matchedCandidate: UntaggedSmsCandidate? = null,
+    val suggestedCandidate: UntaggedSmsCandidate? = null,
+    val isExactAutoMatch: Boolean = false
+)
+
+/**
+ * Pure P0/P1 batch voice-to-bank-SMS matcher:
+ * 1. Never matches future commitments (`isCommitment == true`) or zero-amount items.
+ * 2. Matches strictly within the spoken item's target Jalali day (`nowMillis + eventDayOffset * 86_400_000L`)
+ *    and matching transaction direction (`INCOME` vs `EXPENSE`).
+ * 3. Performs 1-to-1 greedy exact-amount matching first so multiple identical-amount purchases on the
+ *    same day map cleanly to distinct bank SMS rows without double-claiming.
+ * 4. For remaining unmatched spoken items, suggests the closest unclaimed same-day untagged bank SMS
+ *    (handling rounding or transfer fees) so the user can choose cash vs. link with 1 tap.
+ */
+object OrosiVoiceSmsMatcher {
+    private const val DAY_MS = 86_400_000L
+
+    fun matchBatch(
+        items: List<ParsedVoiceExpense>,
+        untaggedBankSms: List<UntaggedSmsCandidate>,
+        nowMillis: Long = System.currentTimeMillis()
+    ): List<VoiceSmsMatchResult> {
+        if (items.isEmpty()) return emptyList()
+        if (untaggedBankSms.isEmpty()) return List(items.size) { VoiceSmsMatchResult() }
+
+        val sortedCandidates = untaggedBankSms.sortedByDescending { it.timestamp }
+        val claimedIds = HashSet<Long>()
+        val results = MutableList(items.size) { VoiceSmsMatchResult() }
+        val itemTargetDates = Array(items.size) { idx ->
+            val offset = items[idx].eventDayOffset
+            JalaliCalendarUtils.timestampToJalali(nowMillis + offset * DAY_MS).dateWithYear
+        }
+
+        // Pass 1: 1-to-1 exact amount + same Jalali day + same direction
+        for (i in items.indices) {
+            val item = items[i]
+            if (item.isCommitment || item.totalAmountToman <= 0L) continue
+            val targetDate = itemTargetDates[i]
+            val exact = sortedCandidates.firstOrNull { cand ->
+                cand.id !in claimedIds &&
+                    cand.jalaliDate == targetDate &&
+                    cand.isIncome == item.isIncome &&
+                    cand.amountToman == item.totalAmountToman
+            }
+            if (exact != null) {
+                claimedIds.add(exact.id)
+                results[i] = VoiceSmsMatchResult(
+                    matchedCandidate = exact,
+                    suggestedCandidate = null,
+                    isExactAutoMatch = true
+                )
+            }
+        }
+
+        // Pass 2: Closest unclaimed same-day same-direction suggestion for remaining non-commitment items
+        for (i in items.indices) {
+            if (results[i].matchedCandidate != null) continue
+            val item = items[i]
+            if (item.isCommitment || item.totalAmountToman <= 0L) continue
+            val targetDate = itemTargetDates[i]
+            val sameDayPool = sortedCandidates.filter { cand ->
+                cand.id !in claimedIds &&
+                    cand.jalaliDate == targetDate &&
+                    cand.isIncome == item.isIncome
+            }
+            if (sameDayPool.isEmpty()) continue
+
+            val closest = sameDayPool.minByOrNull { cand ->
+                kotlin.math.abs(cand.amountToman - item.totalAmountToman)
+            } ?: continue
+
+            val diff = kotlin.math.abs(closest.amountToman - item.totalAmountToman)
+            val maxAmount = kotlin.math.max(closest.amountToman, item.totalAmountToman).coerceAtLeast(1L)
+            val isReasonablyClose = diff <= 50_000L || (diff.toDouble() / maxAmount.toDouble()) <= 0.35 || sameDayPool.size <= 2
+            if (isReasonablyClose) {
+                results[i] = VoiceSmsMatchResult(
+                    matchedCandidate = null,
+                    suggestedCandidate = closest,
+                    isExactAutoMatch = false
+                )
+            }
+        }
+
+        return results
+    }
 }
 
 object PersianVoiceSlangParserEngine {

@@ -116,6 +116,7 @@ import com.example.domain.OrosiCashflowAnalyzer
 import com.example.domain.OrosiRegressionSuite
 import com.example.domain.PersianNumberUtils
 import com.example.domain.RegressionSuiteReport
+import com.example.domain.VoiceSmsMatchResult
 import com.example.ui.VoiceUiState
 import com.example.ui.theme.AlabasterSilk
 import com.example.ui.theme.NishapurTurquoise
@@ -159,6 +160,8 @@ fun VoiceOverlayBottomSheet(
     onSetMultiItemType: (index: Int, isIncome: Boolean) -> Unit = { idx, _ -> onToggleMultiItemType(idx) },
     onToggleMultiItemScale: (index: Int) -> Unit = {},
     onToggleSingleScale: () -> Unit = {},
+    onSetSingleMatchedBankTx: (Long?) -> Unit = {},
+    onSetMultiItemMatchedBankTx: (index: Int, txId: Long?) -> Unit = { _, _ -> },
     onSimulateVoiceRecord: () -> Unit,
     onConfirmVoiceEntry: () -> Unit,
     onDismiss: () -> Unit
@@ -756,8 +759,7 @@ fun VoiceOverlayBottomSheet(
                                                 if (isCommItem) RoyalAmethyst.copy(alpha = 0.45f)
                                                 else if (item.isIncome) NishapurTurquoiseDeep
                                                 else RubyRose.copy(alpha = 0.35f)
-                                            )
-                                            .border(1.dp, cardAccentColor, CircleShape),
+                                            ),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Text(
@@ -771,16 +773,10 @@ fun VoiceOverlayBottomSheet(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                                         modifier = Modifier
-                                            .clip(RoundedCornerShape(50))
+                                            .clip(RoundedCornerShape(10.dp))
                                             .background(
-                                                if (isCommItem) RoyalAmethyst.copy(alpha = 0.25f)
-                                                else PersianLapis.copy(alpha = 0.65f)
-                                            )
-                                            .border(
-                                                1.dp,
-                                                if (isCommItem) RoyalAmethystSoft.copy(alpha = 0.55f)
-                                                else PersianLapisLight.copy(alpha = 0.35f),
-                                                RoundedCornerShape(50)
+                                                if (isCommItem) RoyalAmethyst.copy(alpha = 0.22f)
+                                                else PersianLapis.copy(alpha = 0.55f)
                                             )
                                             .padding(horizontal = 9.dp, vertical = 4.dp)
                                     ) {
@@ -998,17 +994,25 @@ fun VoiceOverlayBottomSheet(
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = if (isThousandScale) {
-                                                "تغییر واحد به میلیون (×۱۰۰۰)"
-                                            } else {
-                                                "تغییر واحد به هزار (÷۱۰۰۰)"
-                                            },
+                                            text = PersianNumberUtils.formatScaleToggleLabel(isThousandScale),
                                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
                                             color = SaffronGoldLight,
                                             maxLines = 1
                                         )
                                     }
                                 }
+                            }
+
+                            // Row 5: Smart Bank SMS Auto-Match / 1-Tap Link Strip (non-commitment items only)
+                            if (targetTx == null && !isCommItem) {
+                                VoiceBankSmsMatchStrip(
+                                    matchResult = voiceState.multiAutoMatches.getOrNull(idx),
+                                    activeMatchedTxId = voiceState.multiMatchedBankTxIds.getOrNull(idx),
+                                    testTagSuffix = "multi_$idx",
+                                    onSetMatchedTxId = { newId ->
+                                        onSetMultiItemMatchedBankTx(idx, newId)
+                                    }
+                                )
                             }
                         }
                     }
@@ -1057,7 +1061,6 @@ fun VoiceOverlayBottomSheet(
                                         .weight(1f)
                                         .clip(RoundedCornerShape(12.dp))
                                         .background(NishapurTurquoiseDeep.copy(alpha = 0.55f))
-                                        .border(1.dp, NishapurTurquoiseBright.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
                                         .padding(10.dp),
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
@@ -1083,7 +1086,6 @@ fun VoiceOverlayBottomSheet(
                                         .weight(1f)
                                         .clip(RoundedCornerShape(12.dp))
                                         .background(RubyRose.copy(alpha = 0.22f))
-                                        .border(1.dp, RubyRoseSoft.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
                                         .padding(10.dp),
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
@@ -1166,13 +1168,8 @@ fun VoiceOverlayBottomSheet(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Box(
                                     modifier = Modifier
-                                        .clip(RoundedCornerShape(50))
-                                        .background(if (voiceState.isIncome) NishapurTurquoiseDeep else RubyRose.copy(alpha = 0.25f))
-                                        .border(
-                                            1.dp,
-                                            if (voiceState.isIncome) NishapurTurquoiseBright else RubyRoseSoft,
-                                            RoundedCornerShape(50)
-                                        )
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(if (voiceState.isIncome) NishapurTurquoiseDeep.copy(alpha = 0.72f) else RubyRose.copy(alpha = 0.22f))
                                         .padding(horizontal = 9.dp, vertical = 3.dp)
                                 ) {
                                     Text(
@@ -1299,17 +1296,22 @@ fun VoiceOverlayBottomSheet(
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = if (isThousandScale) {
-                                                "تغییر واحد به میلیون (×۱۰۰۰)"
-                                            } else {
-                                                "تغییر واحد به هزار (÷۱۰۰۰)"
-                                            },
+                                            text = PersianNumberUtils.formatScaleToggleLabel(isThousandScale),
                                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
                                             color = SaffronGoldLight,
                                             maxLines = 1
                                         )
                                     }
                                 }
+                            }
+
+                            if (!isSingleCommitment) {
+                                VoiceBankSmsMatchStrip(
+                                    matchResult = voiceState.singleAutoMatch,
+                                    activeMatchedTxId = voiceState.singleMatchedBankTxId,
+                                    testTagSuffix = "single",
+                                    onSetMatchedTxId = onSetSingleMatchedBankTx
+                                )
                             }
                         } else {
                             Row(
@@ -1430,17 +1432,37 @@ fun VoiceOverlayBottomSheet(
 
             val confirmButtonLabel = if (isMultiNewMode) {
                 val commCount = multiItems.count { it.isCommitment }
-                val txCount = multiItems.size - commCount
+                val linkedSmsCount = multiItems.indices.count { i ->
+                    !multiItems[i].isCommitment && voiceState.multiMatchedBankTxIds.getOrNull(i) != null
+                }
+                val cashCount = (multiItems.size - commCount - linkedSmsCount).coerceAtLeast(0)
                 when {
+                    linkedSmsCount > 0 && cashCount == 0 && commCount == 0 ->
+                        "تأیید و تکمیل ${PersianNumberUtils.toPersianDigits(linkedSmsCount.toString())} پیامک بانکی"
+                    linkedSmsCount > 0 -> {
+                        val parts = buildList {
+                            add("${PersianNumberUtils.toPersianDigits(linkedSmsCount.toString())} پیامک")
+                            if (cashCount > 0) add("${PersianNumberUtils.toPersianDigits(cashCount.toString())} نقدی")
+                            if (commCount > 0) add("${PersianNumberUtils.toPersianDigits(commCount.toString())} تعهد")
+                        }
+                        "تأیید و ثبت (${parts.joinToString(" و ")})"
+                    }
                     commCount == multiItems.size ->
                         "تأیید و ثبت (${PersianNumberUtils.toPersianDigits(commCount.toString())} تعهد)"
                     commCount > 0 ->
-                        "تأیید و ثبت (${PersianNumberUtils.toPersianDigits(txCount.toString())} تراکنش و ${PersianNumberUtils.toPersianDigits(commCount.toString())} تعهد)"
+                        "تأیید و ثبت (${PersianNumberUtils.toPersianDigits(cashCount.toString())} تراکنش و ${PersianNumberUtils.toPersianDigits(commCount.toString())} تعهد)"
                     else ->
                         "تأیید و ثبت (${PersianNumberUtils.toPersianDigits(multiItems.size.toString())} تراکنش)"
                 }
             } else if (targetTx == null && voiceState.commitmentKind != null) {
                 "تأیید و ثبت در تعهدات"
+            } else if (targetTx == null && voiceState.singleMatchedBankTxId != null) {
+                val matchedBank = when (voiceState.singleMatchedBankTxId) {
+                    voiceState.singleAutoMatch?.matchedCandidate?.id -> voiceState.singleAutoMatch.matchedCandidate.bankName
+                    voiceState.singleAutoMatch?.suggestedCandidate?.id -> voiceState.singleAutoMatch.suggestedCandidate.bankName
+                    else -> ""
+                }
+                if (matchedBank.isNotBlank()) "تأیید و تکمیل پیامک $matchedBank" else "تأیید و تکمیل پیامک بانک"
             } else {
                 "تأیید و ثبت"
             }
@@ -1477,10 +1499,164 @@ fun VoiceOverlayBottomSheet(
     }
 }
 
+@Composable
+private fun VoiceBankSmsMatchStrip(
+    matchResult: VoiceSmsMatchResult?,
+    activeMatchedTxId: Long?,
+    testTagSuffix: String,
+    onSetMatchedTxId: (Long?) -> Unit
+) {
+    val exactCandidate = matchResult?.matchedCandidate
+    val suggestedCandidate = matchResult?.suggestedCandidate
+    val linkedCandidate = when {
+        activeMatchedTxId == null -> null
+        exactCandidate?.id == activeMatchedTxId -> exactCandidate
+        suggestedCandidate?.id == activeMatchedTxId -> suggestedCandidate
+        else -> null
+    }
+
+    if (linkedCandidate != null) {
+        val isExact = exactCandidate?.id == linkedCandidate.id
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(NishapurTurquoiseDeep.copy(alpha = 0.45f))
+                .padding(horizontal = 11.dp, vertical = 9.dp)
+                .testTag("voice_sms_match_linked_$testTagSuffix"),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Sms,
+                        contentDescription = null,
+                        tint = NishapurTurquoiseBright,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = "تطبیق با پیامک ${linkedCandidate.bankName} • ${linkedCandidate.timeStr}",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = NishapurTurquoiseSoft,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (!isExact) {
+                            Text(
+                                text = "مبلغ پیامک بانک (${PersianNumberUtils.formatToman(linkedCandidate.amountToman, showUnit = true)}) حفظ می‌شود",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = OrosiOnSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Surface(
+                    onClick = { onSetMatchedTxId(null) },
+                    shape = RoundedCornerShape(10.dp),
+                    color = OrosiSurfaceContainer,
+                    modifier = Modifier
+                        .heightIn(min = 36.dp)
+                        .testTag("voice_unlink_sms_$testTagSuffix")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "ثبت نقدی جدا",
+                            tint = OrosiOnSurfaceVariant,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Text(
+                            text = "ثبت نقدی جدا",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = AlabasterSilk,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        }
+        return
+    }
+
+    val relinkOrSuggest = exactCandidate ?: suggestedCandidate ?: return
+    val isRelink = exactCandidate != null
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(OrosiSurfaceLow.copy(alpha = 0.85f))
+            .padding(horizontal = 11.dp, vertical = 9.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        Text(
+            text = if (isRelink) {
+                "ثبت به عنوان تراکنش نقدی جدید"
+            } else {
+                "ثبت به عنوان نقدی جدید • پیامک بانکی هم‌روز پیدا شد:"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = OrosiOnSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Surface(
+            onClick = { onSetMatchedTxId(relinkOrSuggest.id) },
+            shape = RoundedCornerShape(10.dp),
+            color = NishapurTurquoiseDeep.copy(alpha = 0.65f),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 40.dp)
+                .testTag("voice_link_suggested_sms_$testTagSuffix")
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Sms,
+                    contentDescription = null,
+                    tint = NishapurTurquoiseBright,
+                    modifier = Modifier.size(15.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = if (isRelink) {
+                        "اتصال مجدد به پیامک ${relinkOrSuggest.bankName} (${relinkOrSuggest.timeStr})"
+                    } else {
+                        "اتصال به پیامک ${relinkOrSuggest.bankName} (${PersianNumberUtils.formatToman(relinkOrSuggest.amountToman)} • ${relinkOrSuggest.timeStr})"
+                    },
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = NishapurTurquoiseSoft,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
 private data class CashflowBadgeVisuals(
     val label: String,
     val bg: Color,
-    val border: Color,
+    val dotColor: Color,
     val textColor: Color
 )
 
@@ -1493,6 +1669,7 @@ fun HeroMathBreakdownBottomSheet(
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var isSelfTransfersExpanded by remember { mutableStateOf(false) }
 
     val summary = remember(transactions, settings.paydayStartDay, reservedCommitmentsToman) {
         OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle(
@@ -1514,20 +1691,20 @@ fun HeroMathBreakdownBottomSheet(
     val badgeVisuals = when (summary.healthStatus) {
         CashflowHealthStatus.POSITIVE -> CashflowBadgeVisuals(
             label = "تراز مثبت و متعادل ✓",
-            bg = NishapurTurquoiseDeep,
-            border = NishapurTurquoiseBright,
+            bg = NishapurTurquoiseDeep.copy(alpha = 0.65f),
+            dotColor = NishapurTurquoiseBright,
             textColor = NishapurTurquoiseSoft
         )
         CashflowHealthStatus.BALANCED -> CashflowBadgeVisuals(
             label = "تراز سربه‌سر",
-            bg = SaffronGold.copy(alpha = 0.22f),
-            border = SaffronGoldBright,
+            bg = SaffronGold.copy(alpha = 0.18f),
+            dotColor = SaffronGoldBright,
             textColor = SaffronGoldLight
         )
         CashflowHealthStatus.DEFICIT -> CashflowBadgeVisuals(
             label = "کسری تراز ماه جاری",
-            bg = RubyRose.copy(alpha = 0.25f),
-            border = RubyRoseSoft,
+            bg = RubyRose.copy(alpha = 0.20f),
+            dotColor = RubyRoseSoft,
             textColor = RubyRoseSoft
         )
     }
@@ -1547,14 +1724,14 @@ fun HeroMathBreakdownBottomSheet(
                 .testTag("hero_math_sheet"),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // 1. Modern Header + Cycle Pill + Truthful Dynamic Status Badge
+            // 1. Serene Header + Borderless Cycle Subtitle + Borderless Tonal Status Indicator
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Top
             ) {
                 Column(
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
                     modifier = Modifier.weight(1f)
                 ) {
                     Text(
@@ -1564,23 +1741,18 @@ fun HeroMathBreakdownBottomSheet(
                     )
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(OrosiSurfaceContainer)
-                            .border(1.dp, OrosiHairline, RoundedCornerShape(50))
-                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.EventNote,
                             contentDescription = null,
-                            tint = PersianLapisLight,
-                            modifier = Modifier.size(13.dp)
+                            tint = OrosiOnSurfaceVariant,
+                            modifier = Modifier.size(14.dp)
                         )
                         Text(
                             text = summary.cycleLabel,
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = PersianLapisLight,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = OrosiOnSurfaceVariant,
                             modifier = Modifier.testTag("hero_math_cycle_label")
                         )
                     }
@@ -1588,24 +1760,31 @@ fun HeroMathBreakdownBottomSheet(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                Box(
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier
-                        .clip(RoundedCornerShape(50))
+                        .clip(RoundedCornerShape(10.dp))
                         .background(badgeVisuals.bg)
-                        .border(1.dp, badgeVisuals.border, RoundedCornerShape(50))
-                        .padding(horizontal = 11.dp, vertical = 6.dp)
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
                         .testTag("hero_math_status_badge")
                 ) {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(badgeVisuals.dotColor)
+                    )
                     Text(
                         text = badgeVisuals.label,
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                         color = badgeVisuals.textColor,
                         maxLines = 1
                     )
                 }
             }
 
-            // 2. Separated 2-Column KPI Cards (Inflow vs Outflow — Stacked OrosiAmountText guarantees zero overlap)
+            // 2. Calm Borderless 2-Column Read-Only KPI Cards (Stacked OrosiAmountText guarantees zero overlap)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -1614,8 +1793,7 @@ fun HeroMathBreakdownBottomSheet(
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(20.dp))
-                        .background(NishapurTurquoiseDeep.copy(alpha = 0.62f))
-                        .border(1.2.dp, NishapurTurquoiseBright.copy(alpha = 0.55f), RoundedCornerShape(20.dp))
+                        .background(NishapurTurquoiseDeep.copy(alpha = 0.52f))
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
@@ -1628,7 +1806,7 @@ fun HeroMathBreakdownBottomSheet(
                             modifier = Modifier
                                 .size(24.dp)
                                 .clip(CircleShape)
-                                .background(NishapurTurquoiseBright.copy(alpha = 0.22f))
+                                .background(NishapurTurquoiseBright.copy(alpha = 0.20f))
                         ) {
                             Icon(
                                 imageVector = Icons.Outlined.ArrowDownward,
@@ -1660,8 +1838,7 @@ fun HeroMathBreakdownBottomSheet(
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(20.dp))
-                        .background(RubyRose.copy(alpha = 0.22f))
-                        .border(1.2.dp, RubyRoseSoft.copy(alpha = 0.55f), RoundedCornerShape(20.dp))
+                        .background(RubyRose.copy(alpha = 0.18f))
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
@@ -1674,7 +1851,7 @@ fun HeroMathBreakdownBottomSheet(
                             modifier = Modifier
                                 .size(24.dp)
                                 .clip(CircleShape)
-                                .background(RubyRoseSoft.copy(alpha = 0.20f))
+                                .background(RubyRoseSoft.copy(alpha = 0.18f))
                         ) {
                             Icon(
                                 imageVector = Icons.Outlined.ArrowUpward,
@@ -1702,13 +1879,12 @@ fun HeroMathBreakdownBottomSheet(
                 }
             }
 
-            // 3. Detailed Breakdown Card (Commitments, Excluded Self-Transfers, Net Cashflow)
+            // 3. Detailed Breakdown Card (Commitments, Interactive Expandable Self-Transfers, Net Cashflow)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(20.dp))
                     .background(OrosiSurfaceContainer)
-                    .border(1.dp, OrosiHairline, RoundedCornerShape(20.dp))
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -1719,46 +1895,119 @@ fun HeroMathBreakdownBottomSheet(
                 )
 
                 if (summary.excludedSelfTransferPairs > 0) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.weight(1f)
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Surface(
+                            onClick = { isSelfTransfersExpanded = !isSelfTransfersExpanded },
+                            shape = RoundedCornerShape(14.dp),
+                            color = OrosiSurfaceHigh,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("self_transfer_expand_row")
                         ) {
-                            Text(
-                                text = "انتقال بین‌حسابی خودی (کسرشده)",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = OrosiOnSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Box(
+                            Row(
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(50))
-                                    .background(OrosiSurfaceHigh)
-                                    .border(1.dp, OrosiHairline, RoundedCornerShape(50))
-                                    .padding(horizontal = 7.dp, vertical = 2.dp)
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = "${PersianNumberUtils.toPersianDigits(summary.excludedSelfTransferPairs.toString())} جفت",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                    color = PersianLapisLight
-                                )
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(
+                                        text = "انتقال بین‌حسابی خودی (کسرشده)",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                        color = AlabasterSilk,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "${PersianNumberUtils.toPersianDigits(summary.excludedSelfTransferPairs.toString())} جفت • ${if (isSelfTransfersExpanded) "بستن جزئیات" else "مشاهده جزئیات"}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = NishapurTurquoiseSoft,
+                                        maxLines = 1
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    OrosiAmountText(
+                                        amountToman = summary.excludedSelfTransferTotalToman,
+                                        color = OrosiOnSurfaceVariant,
+                                        numberStyle = MaterialTheme.typography.labelLarge,
+                                        numberFontWeight = FontWeight.Bold,
+                                        unitStyle = MaterialTheme.typography.labelSmall,
+                                        unitColor = OrosiOnSurfaceVariant.copy(alpha = 0.8f)
+                                    )
+                                    Icon(
+                                        imageVector = if (isSelfTransfersExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                        contentDescription = if (isSelfTransfersExpanded) "بستن فهرست انتقال‌های خودی" else "باز کردن فهرست انتقال‌های خودی",
+                                        tint = NishapurTurquoiseSoft,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                             }
                         }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        OrosiAmountText(
-                            amountToman = summary.excludedSelfTransferTotalToman,
-                            color = OrosiOnSurfaceVariant,
-                            numberStyle = MaterialTheme.typography.labelLarge,
-                            numberFontWeight = FontWeight.Bold,
-                            unitStyle = MaterialTheme.typography.labelSmall,
-                            unitColor = OrosiOnSurfaceVariant.copy(alpha = 0.8f)
-                        )
+
+                        AnimatedVisibility(visible = isSelfTransfersExpanded) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(OrosiSurfaceLow)
+                                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                                    .testTag("self_transfer_details_list"),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                summary.excludedSelfTransferDetails.forEachIndexed { idx, pair ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(
+                                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Text(
+                                                text = "از ${pair.fromBankName} ← به ${pair.toBankName}",
+                                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = AlabasterSilk,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = pair.dateTimeLabel,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = OrosiOnSurfaceVariant,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        OrosiAmountText(
+                                            amountToman = pair.amountToman,
+                                            color = NishapurTurquoiseSoft,
+                                            numberStyle = MaterialTheme.typography.labelLarge,
+                                            numberFontWeight = FontWeight.Bold,
+                                            unitStyle = MaterialTheme.typography.labelSmall,
+                                            unitColor = NishapurTurquoiseSoft.copy(alpha = 0.8f)
+                                        )
+                                    }
+                                    if (idx < summary.excludedSelfTransferDetails.lastIndex) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(1.dp)
+                                                .background(OrosiHairline)
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -1779,7 +2028,6 @@ fun HeroMathBreakdownBottomSheet(
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(14.dp))
                         .background(OrosiSurfaceHigh)
-                        .border(1.dp, netColor.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
                         .padding(horizontal = 14.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -1804,13 +2052,12 @@ fun HeroMathBreakdownBottomSheet(
                 }
             }
 
-            // 4. Daily Safe Budget Hero Strip (Clean BiDi-safe OrosiAmountText)
+            // 4. Daily Safe Budget Hero Strip (Serene borderless tonal container + BiDi-safe OrosiAmountText)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(20.dp))
                     .background(PersianLapis)
-                    .border(1.dp, PersianLapisLight.copy(alpha = 0.38f), RoundedCornerShape(20.dp))
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
