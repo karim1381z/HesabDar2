@@ -1,7 +1,6 @@
 package com.example.ui.components
 
 import android.content.Context
-import android.graphics.BitmapFactory
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -32,16 +31,29 @@ import com.example.domain.PersianNumberUtils
 import com.example.ui.theme.NishapurTurquoiseSoft
 import com.example.ui.theme.OrosiHairline
 import com.example.ui.theme.PersianLapis
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.ZipInputStream
 
 /**
- * In-memory cache that scans `context.assets.list("")` on startup for any `.zip` or `.png` files,
- * reads all `ic_bank_*.png` entries via `ZipInputStream` + `BitmapFactory.decodeStream`,
- * and caches them as `Map<String, ImageBitmap>` keyed by resource name without extension (e.g. `"ic_bank_blu"`).
+ * In-memory cache that asynchronously scans `context.assets` on `Dispatchers.IO`,
+ * decodes & downscales `ic_bank_*.png` icons to 96x96 px (matching 44.dp at xhdpi/xxhdpi),
+ * and publishes a reactive [loadVersion] so composables never block the main thread with ZIP I/O.
  */
 object JibemanAssetLogoCache {
     @Volatile
     private var cachedLogos: Map<String, ImageBitmap>? = null
+    private val isLoading = AtomicBoolean(false)
+
+    // Reactive counter incremented once async IO decoding finishes so visible avatars recompose cleanly.
+    var loadVersion: Int by mutableIntStateOf(0)
+        private set
 
     val ALL_38_IRANIAN_BANKS: List<Pair<String, String>> = listOf(
         "بلو" to "ic_bank_blu",
@@ -84,6 +96,37 @@ object JibemanAssetLogoCache {
         "توسعه صادرات" to "ic_bank_tosee_saderat"
     )
 
+    private const val TARGET_AVATAR_PX = 96
+
+    private fun decodeDownscaledBitmap(bytes: ByteArray): ImageBitmap? {
+        val raw = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+        return if (raw.width > TARGET_AVATAR_PX || raw.height > TARGET_AVATAR_PX) {
+            val scaled = Bitmap.createScaledBitmap(raw, TARGET_AVATAR_PX, TARGET_AVATAR_PX, true)
+            if (scaled !== raw) {
+                raw.recycle()
+            }
+            scaled.asImageBitmap()
+        } else {
+            raw.asImageBitmap()
+        }
+    }
+
+    suspend fun preloadAsync(context: Context) {
+        if (cachedLogos?.isNotEmpty() == true) return
+        if (!isLoading.compareAndSet(false, true)) return
+        val appCtx = context.applicationContext
+        try {
+            val loaded = withContext(Dispatchers.IO) {
+                ensureLoaded(appCtx)
+            }
+            if (loaded.isNotEmpty()) {
+                loadVersion++
+            }
+        } finally {
+            isLoading.set(false)
+        }
+    }
+
     fun ensureLoaded(context: Context): Map<String, ImageBitmap> {
         cachedLogos?.let { if (it.isNotEmpty()) return it }
         synchronized(this) {
@@ -91,7 +134,6 @@ object JibemanAssetLogoCache {
             val result = LinkedHashMap<String, ImageBitmap>()
             try {
                 val assetFiles = context.assets.list("") ?: emptyArray()
-                // 1. Scan any .zip files in assets (e.g. jibeman_android_drawables_*.zip)
                 for (fileName in assetFiles) {
                     if (fileName.endsWith(".zip", ignoreCase = true)) {
                         try {
@@ -106,9 +148,8 @@ object JibemanAssetLogoCache {
                                         ) {
                                             val key = entryBaseName.substringBeforeLast('.')
                                             val bytes = zis.readBytes()
-                                            val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                                            if (bmp != null) {
-                                                result[key] = bmp.asImageBitmap()
+                                            decodeDownscaledBitmap(bytes)?.let { img ->
+                                                result[key] = img
                                             }
                                         }
                                         zis.closeEntry()
@@ -122,9 +163,9 @@ object JibemanAssetLogoCache {
                         try {
                             val key = fileName.substringBeforeLast('.')
                             context.assets.open(fileName).use { stream ->
-                                val bmp = BitmapFactory.decodeStream(stream)
-                                if (bmp != null) {
-                                    result[key] = bmp.asImageBitmap()
+                                val bytes = stream.readBytes()
+                                decodeDownscaledBitmap(bytes)?.let { img ->
+                                    result[key] = img
                                 }
                             }
                         } catch (_: Exception) {
@@ -239,21 +280,18 @@ fun BankLogoAvatar(
     modifier: Modifier = Modifier,
     size: Dp = 44.dp
 ) {
-    val context = LocalContext.current
     val logoKey = remember(bankName) { JibemanAssetLogoCache.resolveBankLogoKey(bankName) }
-    val pngBitmap: ImageBitmap? = remember(logoKey) {
-        if (logoKey == null) null
-        else JibemanAssetLogoCache.peekCachedLogo(logoKey)
-            ?: JibemanAssetLogoCache.ensureLoaded(context)[logoKey]
+    val loadVer = JibemanAssetLogoCache.loadVersion
+    val pngBitmap: ImageBitmap? = remember(logoKey, loadVer) {
+        if (logoKey == null) null else JibemanAssetLogoCache.peekCachedLogo(logoKey)
     }
 
     if (pngBitmap != null) {
-        // PNGs in the Jibeman ZIP already have their own 192x192 circular frame and white background
         Image(
             bitmap = pngBitmap,
             contentDescription = "لوگوی بانک $bankName",
             contentScale = ContentScale.Fit,
-            filterQuality = FilterQuality.Medium,
+            filterQuality = FilterQuality.Low,
             modifier = modifier.size(size)
         )
     } else {

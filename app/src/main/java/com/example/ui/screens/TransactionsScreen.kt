@@ -48,9 +48,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.Immutable
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import com.example.data.local.TransactionEntity
 import com.example.domain.JalaliCalendarUtils
 import com.example.domain.PersianNumberUtils
+import com.example.ui.components.OrosiAmountText
 import com.example.ui.theme.AlabasterSilk
 import com.example.ui.theme.NishapurTurquoise
 import com.example.ui.theme.NishapurTurquoiseBright
@@ -82,11 +88,22 @@ private val TxIncomeCardBorder = NishapurTurquoiseBright.copy(alpha = 0.55f)
 private val TxExpenseCardBg = RubyRose.copy(alpha = 0.22f)
 private val TxExpenseCardBorder = RubyRoseSoft.copy(alpha = 0.55f)
 
+@Immutable
+private data class GroupedTxRowUi(
+    val transaction: TransactionEntity,
+    val shortBank: String,
+    val isIncome: Boolean,
+    val accentColor: Color,
+    val displayAmountToman: Long,
+    val hasCustomNote: Boolean,
+    val noteText: String
+)
+
 private data class DayTransactionGroup(
     val dateSortKey: Int,
     val dateHeaderLabel: String,
     val dayNetSumToman: Long,
-    val transactions: List<TransactionEntity>
+    val rows: List<GroupedTxRowUi>
 )
 
 @Composable
@@ -151,11 +168,37 @@ fun TransactionsScreen(
                 val netSum = sortedDayTxs.sumOf { tx ->
                     if (tx.type == "INCOME") tx.totalAmountToman else -tx.totalAmountToman
                 }
+                val rowModels = sortedDayTxs.map { tx ->
+                    val isIncome = tx.type == "INCOME"
+                    val shortBank = tx.shortBankName
+                    val hasCustomNote = !tx.isUntagged &&
+                        tx.purpose.isNotBlank() &&
+                        tx.purpose != "نیازمند تکمیل صوتی" &&
+                        tx.purpose != "برداشت کارتی / خرید" &&
+                        tx.purpose != "افزایش موجودی حساب" &&
+                        tx.purpose != "واریز به حساب"
+                    val noteText = if (hasCustomNote) {
+                        tx.title.ifBlank { tx.displayTitle }
+                    } else if (tx.isUntagged) {
+                        if (isIncome) "واریز به کارت ($shortBank)" else "خرید کارتی ($shortBank)"
+                    } else {
+                        tx.title
+                    }
+                    GroupedTxRowUi(
+                        transaction = tx,
+                        shortBank = shortBank,
+                        isIncome = isIncome,
+                        accentColor = if (isIncome) NishapurTurquoiseBright else RubyRoseSoft,
+                        displayAmountToman = tx.userShareToman.takeIf { it > 0L } ?: tx.totalAmountToman,
+                        hasCustomNote = hasCustomNote,
+                        noteText = noteText
+                    )
+                }
                 DayTransactionGroup(
                     dateSortKey = sortKey,
                     dateHeaderLabel = dateHeaderLabel,
                     dayNetSumToman = netSum,
-                    transactions = sortedDayTxs
+                    rows = rowModels
                 )
             }
             .sortedByDescending { it.dateSortKey }
@@ -270,18 +313,15 @@ fun TransactionsScreen(
                         )
                     }
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = PersianNumberUtils.formatToman(
-                            monthlyIncomeToman,
-                            showUnit = true,
-                            hideAmount = hideAmounts
-                        ),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 15.sp,
+                    OrosiAmountText(
+                        amountToman = monthlyIncomeToman,
                         color = AlabasterSilk,
-                        maxLines = 1,
-                        softWrap = false
+                        numberStyle = MaterialTheme.typography.titleMedium.copy(fontSize = 15.5.sp),
+                        numberFontWeight = FontWeight.ExtraBold,
+                        unitStyle = MaterialTheme.typography.labelSmall,
+                        unitColor = NishapurTurquoiseSoft,
+                        hideAmount = hideAmounts,
+                        stackedUnit = true
                     )
                 }
 
@@ -309,19 +349,15 @@ fun TransactionsScreen(
                         )
                     }
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = PersianNumberUtils.formatToman(
-                            monthlyExpenseToman,
-                            showUnit = true,
-                            hideAmount = hideAmounts
-                        ),
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 15.sp
-                        ),
+                    OrosiAmountText(
+                        amountToman = monthlyExpenseToman,
                         color = AlabasterSilk,
-                        maxLines = 1,
-                        softWrap = false
+                        numberStyle = MaterialTheme.typography.titleMedium.copy(fontSize = 15.5.sp),
+                        numberFontWeight = FontWeight.ExtraBold,
+                        unitStyle = MaterialTheme.typography.labelSmall,
+                        unitColor = RubyRoseSoft,
+                        hideAmount = hideAmounts,
+                        stackedUnit = true
                     )
                 }
             }
@@ -382,16 +418,6 @@ fun TransactionsScreen(
             // 3. Transactions Grouped by Jalali Date Headers sorted newest day first (timestampMillis DESC)
             sortedDayGroups.forEach { dayGroup ->
                 item(key = "header_${dayGroup.dateSortKey}", contentType = "day_header") {
-                    val formattedDayNet = remember(dayGroup.dayNetSumToman, hideAmounts) {
-                        when {
-                            hideAmounts -> "**** تومان"
-                            dayGroup.dayNetSumToman < 0L ->
-                                "پرداختی ${PersianNumberUtils.formatToman(kotlin.math.abs(dayGroup.dayNetSumToman), showUnit = true)}"
-                            dayGroup.dayNetSumToman > 0L ->
-                                PersianNumberUtils.formatIncomeToman(dayGroup.dayNetSumToman, showUnit = true)
-                            else -> "۰ تومان"
-                        }
-                    }
                     val dayNetColor = when {
                         dayGroup.dayNetSumToman < 0L -> RubyRoseSoft
                         dayGroup.dayNetSumToman > 0L -> NishapurTurquoiseSoft
@@ -412,24 +438,27 @@ fun TransactionsScreen(
                             fontSize = 14.sp,
                             color = PersianLapisLight
                         )
-                        Text(
-                            text = formattedDayNet,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.5.sp,
+                        OrosiAmountText(
+                            amountToman = kotlin.math.abs(dayGroup.dayNetSumToman),
                             color = dayNetColor,
-                            maxLines = 1,
-                            softWrap = false,
+                            numberStyle = MaterialTheme.typography.labelLarge,
+                            numberFontWeight = FontWeight.Bold,
+                            unitStyle = MaterialTheme.typography.labelSmall,
+                            unitColor = dayNetColor.copy(alpha = 0.85f),
+                            isIncome = dayGroup.dayNetSumToman > 0L,
+                            hideAmount = hideAmounts,
+                            prefixText = if (!hideAmounts && dayGroup.dayNetSumToman < 0L) "پرداختی" else null,
                             modifier = Modifier.testTag("day_net_sum_${dayGroup.dateSortKey}")
                         )
                     }
                 }
 
                 items(
-                    items = dayGroup.transactions,
-                    key = { tx -> "month_tx_${tx.id}" },
+                    items = dayGroup.rows,
+                    key = { row -> "month_tx_${row.transaction.id}" },
                     contentType = { "grouped_tx_row" }
-                ) { tx ->
+                ) { row ->
+                    val tx = row.transaction
                     val isConfirmingDelete = activeDeleteConfirmId == tx.id
                     if (isConfirmingDelete) {
                         InlineDeleteConfirmOverlayBox(
@@ -441,7 +470,7 @@ fun TransactionsScreen(
                             onCancel = { activeDeleteConfirmId = null }
                         ) {
                             JibemanGroupedTransactionRow(
-                                transaction = tx,
+                                row = row,
                                 hideAmounts = hideAmounts,
                                 onRowClick = { onTransactionClick(tx) },
                                 onRowLongClick = { activeDeleteConfirmId = null },
@@ -450,7 +479,7 @@ fun TransactionsScreen(
                         }
                     } else {
                         JibemanGroupedTransactionRow(
-                            transaction = tx,
+                            row = row,
                             hideAmounts = hideAmounts,
                             onRowClick = { onTransactionClick(tx) },
                             onRowLongClick = { activeDeleteConfirmId = tx.id },
@@ -466,74 +495,34 @@ fun TransactionsScreen(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun JibemanGroupedTransactionRow(
-    transaction: TransactionEntity,
+    row: GroupedTxRowUi,
     hideAmounts: Boolean,
     onRowClick: () -> Unit,
     onRowLongClick: (() -> Unit)? = null,
     onUntaggedMicClick: () -> Unit
 ) {
-    val isIncome = transaction.type == "INCOME"
-    val accentColor = if (isIncome) NishapurTurquoiseBright else RubyRoseSoft
-    val formattedRowAmount = remember(
-        transaction.type,
-        transaction.userShareToman,
-        transaction.totalAmountToman,
-        hideAmounts
-    ) {
-        val rawAmount = transaction.userShareToman.takeIf { it > 0L } ?: transaction.totalAmountToman
-        if (isIncome) {
-            PersianNumberUtils.formatIncomeToman(
-                amount = rawAmount,
-                showUnit = true,
-                hideAmount = hideAmounts
-            )
-        } else {
-            PersianNumberUtils.formatToman(
-                amount = rawAmount,
-                showUnit = true,
-                hideAmount = hideAmounts
-            )
-        }
-    }
-
-    val hasCustomNote = remember(transaction.isUntagged, transaction.purpose) {
-        !transaction.isUntagged &&
-            transaction.purpose.isNotBlank() &&
-            transaction.purpose != "نیازمند تکمیل صوتی" &&
-            transaction.purpose != "برداشت کارتی / خرید" &&
-            transaction.purpose != "افزایش موجودی حساب" &&
-            transaction.purpose != "واریز به حساب"
-    }
-
-    val noteText = remember(hasCustomNote, transaction.isUntagged, transaction.type, transaction.title, transaction.displayTitle, transaction.shortBankName) {
-        if (hasCustomNote) {
-            transaction.title.ifBlank { transaction.displayTitle }
-        } else if (transaction.isUntagged) {
-            if (isIncome) {
-                "واریز به کارت (${transaction.shortBankName})"
-            } else {
-                "خرید کارتی (${transaction.shortBankName})"
-            }
-        } else {
-            transaction.title
-        }
-    }
+    val tx = row.transaction
+    val borderColor = if (tx.isUntagged) TxUntaggedBorderColor else OrosiHairline
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(OrosiSurfaceContainer, TxCardShape18)
-            .border(
-                1.dp,
-                if (transaction.isUntagged) TxUntaggedBorderColor else OrosiHairline,
-                TxCardShape18
-            )
+            .drawBehind {
+                val radiusPx = 18.dp.toPx()
+                val cr = CornerRadius(radiusPx, radiusPx)
+                drawRoundRect(color = OrosiSurfaceContainer, cornerRadius = cr)
+                drawRoundRect(
+                    color = borderColor,
+                    cornerRadius = cr,
+                    style = Stroke(width = 1.dp.toPx())
+                )
+            }
             .combinedClickable(
                 onClick = onRowClick,
                 onLongClick = onRowLongClick
             )
             .padding(horizontal = 16.dp, vertical = 14.dp)
-            .testTag("grouped_tx_${transaction.id}")
+            .testTag("grouped_tx_${tx.id}")
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -545,7 +534,7 @@ private fun JibemanGroupedTransactionRow(
                 modifier = Modifier.weight(1f)
             ) {
                 com.example.ui.components.BankLogoAvatar(
-                    bankName = transaction.shortBankName,
+                    bankName = row.shortBank,
                     size = 44.dp
                 )
                 Spacer(modifier = Modifier.width(10.dp))
@@ -555,7 +544,7 @@ private fun JibemanGroupedTransactionRow(
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text(
-                        text = transaction.shortBankName,
+                        text = row.shortBank,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = NishapurTurquoiseSoft
@@ -563,46 +552,47 @@ private fun JibemanGroupedTransactionRow(
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = transaction.timeStr,
+                    text = tx.timeStr,
                     style = MaterialTheme.typography.labelSmall,
                     color = OrosiOnSurfaceVariant
                 )
             }
 
-            Text(
-                text = formattedRowAmount,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 14.5.sp,
-                color = accentColor,
-                maxLines = 1,
-                softWrap = false
+            Spacer(modifier = Modifier.width(8.dp))
+
+            OrosiAmountText(
+                amountToman = row.displayAmountToman,
+                color = row.accentColor,
+                numberStyle = MaterialTheme.typography.titleSmall,
+                numberFontWeight = FontWeight.ExtraBold,
+                unitStyle = MaterialTheme.typography.labelSmall,
+                unitColor = row.accentColor.copy(alpha = 0.85f),
+                isIncome = row.isIncome,
+                hideAmount = hideAmounts
             )
         }
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Underneath each row: show user's custom note/voice tag or prompt to tag with voice
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = noteText,
+                text = row.noteText,
                 style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (hasCustomNote) FontWeight.Bold else FontWeight.Normal,
-                fontSize = if (noteText.length > 24) 13.sp else 14.sp,
+                fontWeight = if (row.hasCustomNote) FontWeight.Bold else FontWeight.Normal,
+                fontSize = if (row.noteText.length > 24) 13.sp else 14.sp,
                 lineHeight = 19.sp,
-                color = if (hasCustomNote) SaffronGoldLight else OrosiOnSurfaceVariant,
+                color = if (row.hasCustomNote) SaffronGoldLight else OrosiOnSurfaceVariant,
                 maxLines = 3,
-                softWrap = true,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
 
-            if (transaction.isUntagged) {
-                val untaggedBtnLabel = if (isIncome) "بگو از کجا اومد؟" else "بگو بابت چی؟"
+            if (tx.isUntagged) {
+                val untaggedBtnLabel = if (row.isIncome) "بگو از کجا اومد؟" else "بگو بابت چی؟"
                 Spacer(modifier = Modifier.width(8.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,

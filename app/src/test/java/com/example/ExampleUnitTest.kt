@@ -887,6 +887,74 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun testVideoBBatchTemporalAndFutureIntentVoiceNlu() {
+        // 1. Exact video bbatch_22 utterance:
+        // Past salary (-2 days) + future expected inflow (tomorrow -> RECEIVABLE commitment) + planned bicycle purchase (-> DEBT commitment)
+        val phrase = "خوب من پریروز ۳۰ تومن حقوق گرفتم فردا هم ۱۵ تومان دیگه میاد به حسابم و می‌خوام ۱۰ تومن بدم به یه دوچرخه"
+        val items = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(phrase)
+        assertEquals(3, items.size)
+
+        // Item 0: Past salary transaction
+        assertEquals("حقوق", items[0].purposeCategory)
+        assertEquals(30_000_000L, items[0].totalAmountToman)
+        assertEquals(true, items[0].isIncome)
+        assertNull(items[0].commitmentKind)
+        assertEquals(-2, items[0].eventDayOffset)
+
+        // Item 1: Future expected inflow -> RECEIVABLE commitment with dueDateHint = "فردا"
+        assertEquals("واریز به حساب", items[1].purposeCategory)
+        assertEquals(15_000_000L, items[1].totalAmountToman)
+        assertEquals(true, items[1].isIncome)
+        assertEquals("RECEIVABLE", items[1].commitmentKind)
+        assertEquals("فردا", items[1].dueDateHint)
+        assertEquals("واریز آینده", items[1].commitmentSubLabel)
+
+        // Item 2: Future planned purchase -> DEBT commitment with clean title "دوچرخه"
+        assertEquals("دوچرخه", items[2].purposeCategory)
+        assertEquals(10_000_000L, items[2].totalAmountToman)
+        assertEquals(false, items[2].isIncome)
+        assertEquals("DEBT", items[2].commitmentKind)
+        assertEquals("برنامه خرید", items[2].commitmentSubLabel)
+
+        // 2. Generalized past-date single transaction ("دیروز" -> eventDayOffset = -1)
+        val yesterdayBakery = PersianVoiceSlangParserEngine.parseVoiceCommand("دیروز ۵۰ تومن نانوایی خریدم")
+        assertEquals("نانوایی", yesterdayBakery.purposeCategory)
+        assertEquals(50_000L, yesterdayBakery.totalAmountToman)
+        assertEquals(false, yesterdayBakery.isIncome)
+        assertNull(yesterdayBakery.commitmentKind)
+        assertEquals(-1, yesterdayBakery.eventDayOffset)
+
+        // 3. Generalized planned durable purchase ("می‌خوام ۱۲ تومن بدم گوشی بخرم")
+        val plannedPhone = PersianVoiceSlangParserEngine.parseVoiceCommand("می‌خوام ۱۲ تومن بدم گوشی بخرم")
+        assertEquals("گوشی", plannedPhone.purposeCategory)
+        assertEquals(12_000_000L, plannedPhone.totalAmountToman)
+        assertEquals("DEBT", plannedPhone.commitmentKind)
+        assertEquals("برنامه خرید", plannedPhone.commitmentSubLabel)
+
+        // 4. Generalized future expected inflow ("پس‌فردا قراره ۲۰ میلیون واریز بشه به حسابم")
+        val futureDeposit = PersianVoiceSlangParserEngine.parseVoiceCommand("پس‌فردا قراره ۲۰ میلیون واریز بشه به حسابم")
+        assertEquals(20_000_000L, futureDeposit.totalAmountToman)
+        assertEquals(true, futureDeposit.isIncome)
+        assertEquals("RECEIVABLE", futureDeposit.commitmentKind)
+        assertEquals("پس‌فردا", futureDeposit.dueDateHint)
+
+        // 5. Negated/cancelled past intent MUST still be dropped!
+        val cancelledBike = PersianVoiceSlangParserEngine.parseMultiVoiceCommands("می‌خواستم ۱۰ تومن بدم دوچرخه بخرم ولی نخریدم")
+        assertEquals(0, cancelledBike.size)
+    }
+
+    @Test
+    fun testFastGroupedPersianNumberFormatting() {
+        assertEquals("۰", PersianNumberUtils.formatGroupedPersianLong(0L))
+        assertEquals("۷۵۰", PersianNumberUtils.formatGroupedPersianLong(750L))
+        assertEquals("۱,۰۰۰", PersianNumberUtils.formatGroupedPersianLong(1_000L))
+        assertEquals("۴۲,۶۶۶,۸۷۷", PersianNumberUtils.formatGroupedPersianLong(42_666_877L))
+        assertEquals("۱,۰۰۰,۰۰۰,۰۰۰", PersianNumberUtils.formatGroupedPersianLong(1_000_000_000L))
+        assertEquals("۴۲,۶۶۶,۸۷۷ تومان", PersianNumberUtils.formatToman(42_666_877L, showUnit = true))
+        assertEquals("\u2066\u200E+۱,۱۵۲,۲۰۶\u2069 تومان", PersianNumberUtils.formatIncomeToman(1_152_206L, showUnit = true))
+    }
+
+    @Test
     fun testFullOrosiRegressionAndStressSuitePasses100Percent() {
         val report = com.example.domain.OrosiRegressionSuite.runFullRegressionAndStressSuite()
         for (r in report.results) {

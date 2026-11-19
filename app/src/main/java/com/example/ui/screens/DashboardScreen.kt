@@ -74,11 +74,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.Immutable
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.drawscope.Stroke
 import com.example.data.local.AppSettingsEntity
 import com.example.data.local.BankAccountEntity
 import com.example.data.local.CommitmentEntity
 import com.example.data.local.TransactionEntity
 import com.example.domain.PersianNumberUtils
+import com.example.ui.components.OrosiAmountText
 import com.example.ui.theme.AlabasterSilk
 import com.example.ui.theme.NishapurTurquoise
 import com.example.ui.theme.NishapurTurquoiseBright
@@ -166,8 +170,34 @@ fun DashboardScreen(
     val visibleTransactions = remember(transactions) {
         transactions.filter { it.totalAmountToman > 0L }
     }
-    val recentTransactions = remember(visibleTransactions) {
-        visibleTransactions.take(20)
+    val recentTxRows = remember(visibleTransactions) {
+        visibleTransactions.take(20).map { tx ->
+            val shortBank = tx.shortBankName
+            val rowTitle = if (tx.isUntagged) {
+                if (tx.type == "INCOME") "واریز به کارت ($shortBank)" else "خرید کارتی ($shortBank)"
+            } else {
+                tx.title.ifBlank { tx.displayTitle }
+            }
+            val displayAmt = when (tx.type) {
+                "SELF_TRANSFER" -> tx.totalAmountToman
+                else -> tx.userShareToman.takeIf { it > 0L } ?: tx.totalAmountToman
+            }
+            val color = when (tx.type) {
+                "INCOME" -> NishapurTurquoiseSoft
+                "GOLD_SAVE" -> SaffronGoldLight
+                "SELF_TRANSFER" -> OrosiOnSurfaceVariant
+                else -> RubyRoseSoft
+            }
+            DashTxRowUi(
+                transaction = tx,
+                shortBank = shortBank,
+                rowTitle = rowTitle,
+                subtitleText = tx.simpleSubtitle,
+                displayAmountToman = displayAmt,
+                isIncome = tx.type == "INCOME",
+                amountColor = color
+            )
+        }
     }
 
     // Single hoisted delete-confirm ID for the whole LazyColumn (zero per-row Box / state overhead on scroll)
@@ -343,10 +373,11 @@ fun DashboardScreen(
             }
         } else {
             items(
-                items = recentTransactions,
-                key = { tx -> tx.id },
+                items = recentTxRows,
+                key = { row -> row.transaction.id },
                 contentType = { "transaction_card" }
-            ) { tx ->
+            ) { row ->
+                val tx = row.transaction
                 val isConfirmingDelete = activeDeleteConfirmId == tx.id
                 if (isConfirmingDelete) {
                     InlineDeleteConfirmOverlayBox(
@@ -357,8 +388,8 @@ fun DashboardScreen(
                         },
                         onCancel = { activeDeleteConfirmId = null }
                     ) {
-                        CalmTransactionCard(
-                            transaction = tx,
+                        CalmTransactionCardFast(
+                            row = row,
                             hideAmounts = settings.hideAmounts,
                             onRowClick = { onTransactionClick(tx) },
                             onRowLongClick = { activeDeleteConfirmId = null },
@@ -366,8 +397,8 @@ fun DashboardScreen(
                         )
                     }
                 } else {
-                    CalmTransactionCard(
-                        transaction = tx,
+                    CalmTransactionCardFast(
+                        row = row,
                         hideAmounts = settings.hideAmounts,
                         onRowClick = { onTransactionClick(tx) },
                         onRowLongClick = { activeDeleteConfirmId = tx.id },
@@ -563,31 +594,10 @@ private fun JibemanFinancialStatusHeroCard(
         0.5f
     }
 
-    val formattedFreeBalance = remember(freeBalance, hideAmounts) {
-        PersianNumberUtils.formatToman(
-            freeBalance,
-            showUnit = true,
-            hideAmount = hideAmounts
-        )
-    }
-    val formattedTotalBalance = remember(selectedTotalBalance, hideAmounts) {
-        PersianNumberUtils.formatToman(
-            selectedTotalBalance,
-            showUnit = true,
-            hideAmount = hideAmounts
-        )
-    }
-    val formattedCommitments = remember(unpaidCommitmentsToman, hideAmounts) {
-        PersianNumberUtils.formatToman(
-            unpaidCommitmentsToman,
-            showUnit = true,
-            hideAmount = hideAmounts
-        )
-    }
-
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(DashCardShape28)
             .background(DashHeroBgBrush, DashCardShape28)
             .drawBehind {
                 drawCircle(
@@ -737,17 +747,21 @@ private fun JibemanFinancialStatusHeroCard(
                         color = NishapurTurquoiseSoft
                     )
                 } else {
-                    Text(
-                        text = formattedFreeBalance,
-                        style = MaterialTheme.typography.headlineMedium.copy(
+                    OrosiAmountText(
+                        amountToman = freeBalance,
+                        color = AlabasterSilk,
+                        numberStyle = MaterialTheme.typography.headlineMedium.copy(
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 28.sp,
                             lineHeight = 34.sp
                         ),
-                        color = AlabasterSilk,
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        softWrap = false,
+                        unitStyle = MaterialTheme.typography.titleSmall.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 15.sp
+                        ),
+                        unitColor = PersianLapisLight,
+                        hideAmount = hideAmounts,
+                        unitSpacing = 6.dp,
                         modifier = Modifier.testTag("hero_peace_of_mind_amount")
                     )
 
@@ -828,12 +842,14 @@ private fun JibemanFinancialStatusHeroCard(
                                 .background(shimmerBrush)
                         )
                     } else {
-                        Text(
-                            text = formattedTotalBalance,
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        OrosiAmountText(
+                            amountToman = selectedTotalBalance,
                             color = NishapurTurquoiseSoft,
-                            maxLines = 1,
-                            softWrap = false
+                            numberStyle = MaterialTheme.typography.titleSmall,
+                            numberFontWeight = FontWeight.Bold,
+                            unitStyle = MaterialTheme.typography.labelSmall,
+                            unitColor = NishapurTurquoiseSoft.copy(alpha = 0.85f),
+                            hideAmount = hideAmounts
                         )
                     }
                 }
@@ -869,12 +885,14 @@ private fun JibemanFinancialStatusHeroCard(
                                 .background(shimmerBrush)
                         )
                     } else {
-                        Text(
-                            text = formattedCommitments,
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        OrosiAmountText(
+                            amountToman = unpaidCommitmentsToman,
                             color = RubyRoseSoft,
-                            maxLines = 1,
-                            softWrap = false
+                            numberStyle = MaterialTheme.typography.titleSmall,
+                            numberFontWeight = FontWeight.Bold,
+                            unitStyle = MaterialTheme.typography.labelSmall,
+                            unitColor = RubyRoseSoft.copy(alpha = 0.85f),
+                            hideAmount = hideAmounts
                         )
                     }
             }
@@ -1005,6 +1023,17 @@ internal fun TransactionRowSkeletonShimmer(
     }
 }
 
+@Immutable
+private data class DashTxRowUi(
+    val transaction: TransactionEntity,
+    val shortBank: String,
+    val rowTitle: String,
+    val subtitleText: String,
+    val displayAmountToman: Long,
+    val isIncome: Boolean,
+    val amountColor: Color
+)
+
 @Composable
 private fun BankAccountCarouselCard(
     account: BankAccountEntity,
@@ -1013,22 +1042,22 @@ private fun BankAccountCarouselCard(
     onCardClick: () -> Unit,
     onToggleTankhah: () -> Unit
 ) {
-    val formattedAccountBalance = remember(account.balanceToman, hideAmounts) {
-        PersianNumberUtils.formatToman(
-            account.balanceToman,
-            showUnit = true,
-            hideAmount = hideAmounts
-        )
-    }
+    val borderColor = if (showTankhahBadge && account.isTankhah) DashTankhahBorderColor else OrosiHairline
+    val strokeWidthDp = if (showTankhahBadge && account.isTankhah) 1.5.dp else 1.dp
+
     Column(
         modifier = Modifier
             .width(184.dp)
-            .background(OrosiSurfaceHigh, DashCardShape20)
-            .border(
-                width = if (showTankhahBadge && account.isTankhah) 1.5.dp else 1.dp,
-                color = if (showTankhahBadge && account.isTankhah) DashTankhahBorderColor else OrosiHairline,
-                shape = DashCardShape20
-            )
+            .drawBehind {
+                val radiusPx = 20.dp.toPx()
+                val cr = CornerRadius(radiusPx, radiusPx)
+                drawRoundRect(color = OrosiSurfaceHigh, cornerRadius = cr)
+                drawRoundRect(
+                    color = borderColor,
+                    cornerRadius = cr,
+                    style = Stroke(width = strokeWidthDp.toPx())
+                )
+            }
             .clickable(onClick = onCardClick)
             .padding(14.dp)
             .testTag("carousel_account_${account.bankName}"),
@@ -1050,26 +1079,26 @@ private fun BankAccountCarouselCard(
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
                     text = account.bankName,
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
                     color = AlabasterSilk,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
 
-            // ONLY show the "تنخواه" pill badge when tankhahModeEnabled == true
             if (showTankhahBadge) {
                 Spacer(modifier = Modifier.width(4.dp))
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(50))
+                        .clip(DashPillShape50)
                         .background(
                             if (account.isTankhah) NishapurTurquoiseDeep else OrosiSurfaceContainer
                         )
                         .border(
                             1.dp,
                             if (account.isTankhah) NishapurTurquoiseBright else OrosiHairline,
-                            RoundedCornerShape(50)
+                            DashPillShape50
                         )
                         .clickable(onClick = onToggleTankhah)
                         .padding(horizontal = 8.dp, vertical = 3.dp)
@@ -1087,10 +1116,9 @@ private fun BankAccountCarouselCard(
                         }
                         Text(
                             text = if (account.isTankhah) "تنخواه" else "شخصی",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold
-                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
                             color = if (account.isTankhah) NishapurTurquoiseSoft else OrosiOnSurfaceVariant
                         )
                     }
@@ -1104,21 +1132,107 @@ private fun BankAccountCarouselCard(
                 style = MaterialTheme.typography.labelSmall,
                 color = OrosiOnSurfaceVariant
             )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = formattedAccountBalance,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 14.sp,
+            Spacer(modifier = Modifier.height(3.dp))
+            OrosiAmountText(
+                amountToman = account.balanceToman,
                 color = AlabasterSilk,
-                maxLines = 1,
-                softWrap = false
+                numberStyle = MaterialTheme.typography.titleSmall,
+                numberFontWeight = FontWeight.ExtraBold,
+                unitStyle = MaterialTheme.typography.labelSmall,
+                unitColor = OrosiOnSurfaceVariant,
+                hideAmount = hideAmounts
             )
         }
     }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun CalmTransactionCardFast(
+    row: DashTxRowUi,
+    hideAmounts: Boolean,
+    onRowClick: () -> Unit,
+    onRowLongClick: (() -> Unit)? = null,
+    onUntaggedMicClick: () -> Unit
+) {
+    val tx = row.transaction
+    val borderColor = if (tx.isUntagged) DashUntaggedBorderColor else OrosiHairline
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                val radiusPx = 20.dp.toPx()
+                val cr = CornerRadius(radiusPx, radiusPx)
+                drawRoundRect(color = OrosiSurfaceContainer, cornerRadius = cr)
+                drawRoundRect(
+                    color = borderColor,
+                    cornerRadius = cr,
+                    style = Stroke(width = 1.dp.toPx())
+                )
+            }
+            .combinedClickable(
+                onClick = onRowClick,
+                onLongClick = onRowLongClick
+            )
+            .padding(horizontal = 14.dp, vertical = 14.dp)
+            .testTag("transaction_item_${tx.id}"),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        com.example.ui.components.BankLogoAvatar(
+            bankName = row.shortBank,
+            size = 44.dp
+        )
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = row.rowTitle,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                fontSize = if (row.rowTitle.length > 22) 13.8.sp else 15.sp,
+                lineHeight = 20.sp,
+                color = AlabasterSilk,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = row.subtitleText,
+                style = MaterialTheme.typography.bodySmall,
+                fontSize = 11.5.sp,
+                lineHeight = 17.sp,
+                color = OrosiOnSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("transaction_subtitle_${tx.id}")
+            )
+            if (tx.isUntagged) {
+                Spacer(modifier = Modifier.height(6.dp))
+                PulsingTurquoiseMicButton(
+                    isIncome = row.isIncome,
+                    onClick = onUntaggedMicClick,
+                    testTag = "untagged_mic_button_${tx.id}"
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(10.dp))
+
+        OrosiAmountText(
+            amountToman = row.displayAmountToman,
+            color = row.amountColor,
+            numberStyle = MaterialTheme.typography.titleSmall,
+            numberFontWeight = FontWeight.ExtraBold,
+            unitStyle = MaterialTheme.typography.labelSmall,
+            unitColor = row.amountColor.copy(alpha = 0.85f),
+            isIncome = row.isIncome,
+            hideAmount = hideAmounts
+        )
+    }
+}
+
 @Composable
 fun CalmTransactionCard(
     transaction: TransactionEntity,
@@ -1127,128 +1241,40 @@ fun CalmTransactionCard(
     onRowLongClick: (() -> Unit)? = null,
     onUntaggedMicClick: () -> Unit
 ) {
-    val amountColor = when (transaction.type) {
-        "INCOME" -> NishapurTurquoiseSoft
-        "GOLD_SAVE" -> SaffronGoldLight
-        "SELF_TRANSFER" -> OrosiOnSurfaceVariant
-        else -> RubyRoseSoft
-    }
-
-    val shortBank = transaction.shortBankName
-    val rowTitle = remember(
-        transaction.isUntagged,
-        transaction.type,
-        transaction.title,
-        transaction.displayTitle,
-        shortBank
-    ) {
-        if (transaction.isUntagged) {
-            if (transaction.type == "INCOME") {
-                "واریز به کارت ($shortBank)"
-            } else {
-                "خرید کارتی ($shortBank)"
-            }
+    val row = remember(transaction) {
+        val shortBank = transaction.shortBankName
+        val rowTitle = if (transaction.isUntagged) {
+            if (transaction.type == "INCOME") "واریز به کارت ($shortBank)" else "خرید کارتی ($shortBank)"
         } else {
             transaction.title.ifBlank { transaction.displayTitle }
         }
-    }
-    val subtitleText = transaction.simpleSubtitle
-    val formattedSingleLineAmount = remember(
-        transaction.type,
-        transaction.userShareToman,
-        transaction.totalAmountToman,
-        hideAmounts
-    ) {
-        when (transaction.type) {
-            "INCOME" -> PersianNumberUtils.formatIncomeToman(
-                transaction.userShareToman,
-                showUnit = true,
-                hideAmount = hideAmounts
-            )
-            "SELF_TRANSFER" -> PersianNumberUtils.formatToman(
-                transaction.totalAmountToman,
-                showUnit = true,
-                hideAmount = hideAmounts
-            )
-            else -> PersianNumberUtils.formatToman(
-                transaction.userShareToman,
-                showUnit = true,
-                hideAmount = hideAmounts
-            )
+        val displayAmt = when (transaction.type) {
+            "SELF_TRANSFER" -> transaction.totalAmountToman
+            else -> transaction.userShareToman.takeIf { it > 0L } ?: transaction.totalAmountToman
         }
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(OrosiSurfaceContainer, DashCardShape20)
-            .border(
-                width = 1.dp,
-                color = if (transaction.isUntagged) DashUntaggedBorderColor else OrosiHairline,
-                shape = DashCardShape20
-            )
-            .combinedClickable(
-                onClick = onRowClick,
-                onLongClick = onRowLongClick
-            )
-            .padding(horizontal = 14.dp, vertical = 14.dp)
-            .testTag("transaction_item_${transaction.id}"),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Official 44.dp circular Bank Logo Avatar
-        com.example.ui.components.BankLogoAvatar(
-            bankName = shortBank,
-            size = 44.dp
-        )
-
-        Spacer(modifier = Modifier.width(12.dp))
-
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = rowTitle,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                fontSize = if (rowTitle.length > 22) 13.8.sp else 15.5.sp,
-                lineHeight = 20.sp,
-                color = AlabasterSilk,
-                maxLines = 3,
-                softWrap = true,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = subtitleText,
-                style = MaterialTheme.typography.bodySmall,
-                fontSize = 11.5.sp,
-                lineHeight = 17.sp,
-                color = OrosiOnSurfaceVariant,
-                maxLines = 2,
-                softWrap = true,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.testTag("transaction_subtitle_${transaction.id}")
-            )
-            if (transaction.isUntagged) {
-                Spacer(modifier = Modifier.height(6.dp))
-                PulsingTurquoiseMicButton(
-                    isIncome = transaction.type == "INCOME",
-                    onClick = onUntaggedMicClick,
-                    testTag = "untagged_mic_button_${transaction.id}"
-                )
-            }
+        val color = when (transaction.type) {
+            "INCOME" -> NishapurTurquoiseSoft
+            "GOLD_SAVE" -> SaffronGoldLight
+            "SELF_TRANSFER" -> OrosiOnSurfaceVariant
+            else -> RubyRoseSoft
         }
-
-        Spacer(modifier = Modifier.width(10.dp))
-
-        Text(
-            text = formattedSingleLineAmount,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.ExtraBold,
-            fontSize = 15.sp,
-            color = amountColor,
-            maxLines = 1,
-            softWrap = false
+        DashTxRowUi(
+            transaction = transaction,
+            shortBank = shortBank,
+            rowTitle = rowTitle,
+            subtitleText = transaction.simpleSubtitle,
+            displayAmountToman = displayAmt,
+            isIncome = transaction.type == "INCOME",
+            amountColor = color
         )
     }
+    CalmTransactionCardFast(
+        row = row,
+        hideAmounts = hideAmounts,
+        onRowClick = onRowClick,
+        onRowLongClick = onRowLongClick,
+        onUntaggedMicClick = onUntaggedMicClick
+    )
 }
 
 @Composable

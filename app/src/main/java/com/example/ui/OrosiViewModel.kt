@@ -57,7 +57,9 @@ data class VoiceUiState(
     val hasSummaryTotalMismatch: Boolean = false,
     val statedSummaryHeaderToman: Long = 0L,
     val commitmentKind: String? = null,
-    val dueDateHint: String = ""
+    val dueDateHint: String = "",
+    val eventDayOffset: Int = 0,
+    val commitmentSubLabel: String = ""
 )
 
 data class OrosiUiState(
@@ -116,8 +118,8 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
     private var monthSyncJob: kotlinx.coroutines.Job? = null
 
     init {
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            com.example.ui.components.JibemanAssetLogoCache.ensureLoaded(appContext)
+        viewModelScope.launch {
+            com.example.ui.components.JibemanAssetLogoCache.preloadAsync(appContext)
         }
         viewModelScope.launch {
             try {
@@ -801,7 +803,9 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             hasSummaryTotalMismatch = summaryMismatchAmount != null,
             statedSummaryHeaderToman = summaryMismatchAmount ?: 0L,
             commitmentKind = if (targetTx == null && effectiveMultiItems.isEmpty()) parsed.commitmentKind else null,
-            dueDateHint = if (targetTx == null && effectiveMultiItems.isEmpty()) parsed.dueDateHint else ""
+            dueDateHint = if (targetTx == null && effectiveMultiItems.isEmpty()) parsed.dueDateHint else "",
+            eventDayOffset = if (targetTx == null && effectiveMultiItems.isEmpty()) parsed.eventDayOffset else 0,
+            commitmentSubLabel = if (targetTx == null && effectiveMultiItems.isEmpty()) parsed.commitmentSubLabel else ""
         )
     }
 
@@ -937,7 +941,9 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
                 cardLabel = targetTx?.cardInfo ?: "نقدی / دستی",
                 isIncome = v.isIncome,
                 commitmentKind = effectiveCommitmentKind,
-                dueDateHint = effectiveDueDateHint
+                dueDateHint = effectiveDueDateHint,
+                eventDayOffset = if (targetTx == null) (v.eventDayOffset.takeIf { it != 0 } ?: parsedFromSpeech.eventDayOffset) else 0,
+                commitmentSubLabel = if (effectiveCommitmentKind != null) v.commitmentSubLabel.ifBlank { parsedFromSpeech.commitmentSubLabel } else ""
             )
 
             repository.confirmVoiceExpense(finalParsed, targetTx?.id)

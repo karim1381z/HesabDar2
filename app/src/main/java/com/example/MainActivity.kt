@@ -151,6 +151,9 @@ fun OrosiFinanceApp(
 
     var showSplashIntro by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) {
+        com.example.ui.components.JibemanAssetLogoCache.preloadAsync(context)
+    }
+    LaunchedEffect(Unit) {
         delay(600L)
         showSplashIntro = false
     }
@@ -325,6 +328,18 @@ fun OrosiFinanceApp(
                 }
             }
 
+            val onToggleHideAmounts = remember(viewModel) { { viewModel.toggleHideAmounts() } }
+            val onSetOnlyTankhahMode = remember(viewModel) { { v: Boolean -> viewModel.setOnlyTankhahMode(v) } }
+            val onToggleAccountTankhah = remember(viewModel) { { b: String -> viewModel.toggleAccountTankhah(b) } }
+            val onOpenAccountsTab = remember(viewModel) { { viewModel.navigateTo(OrosiScreen.ACCOUNTS) } }
+            val onHeroCardClick = remember(viewModel) { { viewModel.setShowHeroMathSheet(true) } }
+            val onTransactionClick = remember(viewModel) { { tx: com.example.data.local.TransactionEntity -> viewModel.openTransactionDetails(tx) } }
+            val onUntaggedMicClick = remember(viewModel) { { tx: com.example.data.local.TransactionEntity -> viewModel.openVoiceForUntaggedTransaction(tx) } }
+            val onDeleteTransaction = remember(viewModel) { { tx: com.example.data.local.TransactionEntity -> viewModel.deleteTransaction(tx) } }
+            val onOpenTransactionsTab = remember(viewModel) { { viewModel.navigateTo(OrosiScreen.TRANSACTIONS) } }
+            val onChangeMonth = remember(viewModel) { { delta: Int -> viewModel.changeSelectedMonth(delta) } }
+            val onBackToHome = remember(viewModel) { { viewModel.navigateTo(OrosiScreen.HOME) } }
+
             Crossfade(
                 targetState = uiState.currentScreen,
                 label = "orosi_screen_transition",
@@ -338,22 +353,20 @@ fun OrosiFinanceApp(
                             commitments = uiState.commitments,
                             transactions = uiState.transactions,
                             isSyncingSms = uiState.isSyncingSms,
-                            onToggleHideAmounts = { viewModel.toggleHideAmounts() },
-                            onSetOnlyTankhahMode = { viewModel.setOnlyTankhahMode(it) },
-                            onToggleAccountTankhah = { viewModel.toggleAccountTankhah(it) },
-                            onOpenAccountsTab = { viewModel.navigateTo(OrosiScreen.ACCOUNTS) },
-                            onHeroCardClick = { viewModel.setShowHeroMathSheet(true) },
+                            onToggleHideAmounts = onToggleHideAmounts,
+                            onSetOnlyTankhahMode = onSetOnlyTankhahMode,
+                            onToggleAccountTankhah = onToggleAccountTankhah,
+                            onOpenAccountsTab = onOpenAccountsTab,
+                            onHeroCardClick = onHeroCardClick,
                             onAddVoiceClick = {
                                 voicePermissionLauncher.launch(
                                     arrayOf(Manifest.permission.RECORD_AUDIO)
                                 )
                             },
-                            onTransactionClick = { tx -> viewModel.openTransactionDetails(tx) },
-                            onUntaggedMicClick = { tx ->
-                                viewModel.openVoiceForUntaggedTransaction(tx)
-                            },
-                            onDeleteTransaction = { tx -> viewModel.deleteTransaction(tx) },
-                            onOpenTransactionsTab = { viewModel.navigateTo(OrosiScreen.TRANSACTIONS) }
+                            onTransactionClick = onTransactionClick,
+                            onUntaggedMicClick = onUntaggedMicClick,
+                            onDeleteTransaction = onDeleteTransaction,
+                            onOpenTransactionsTab = onOpenTransactionsTab
                         )
                     }
 
@@ -363,13 +376,11 @@ fun OrosiFinanceApp(
                             selectedYearMonthKey = uiState.selectedYearMonthKey,
                             hideAmounts = uiState.settings.hideAmounts,
                             isLoadingSelectedMonth = uiState.loadingMonthKey == uiState.selectedYearMonthKey,
-                            onChangeMonth = { delta -> viewModel.changeSelectedMonth(delta) },
-                            onTransactionClick = { tx -> viewModel.openTransactionDetails(tx) },
-                            onUntaggedMicClick = { tx ->
-                                viewModel.openVoiceForUntaggedTransaction(tx)
-                            },
-                            onDeleteTransaction = { tx -> viewModel.deleteTransaction(tx) },
-                            onBackToHome = { viewModel.navigateTo(OrosiScreen.HOME) }
+                            onChangeMonth = onChangeMonth,
+                            onTransactionClick = onTransactionClick,
+                            onUntaggedMicClick = onUntaggedMicClick,
+                            onDeleteTransaction = onDeleteTransaction,
+                            onBackToHome = onBackToHome
                         )
                     }
 

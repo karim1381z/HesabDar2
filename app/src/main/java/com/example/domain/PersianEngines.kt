@@ -57,6 +57,30 @@ object PersianNumberUtils {
         return (amountToman / 1_000L) * 1_000L
     }
 
+    /**
+     * Zero-allocation fast thousands-grouping into Persian digits (avoids `DecimalFormat` & `DecimalFormatSymbols`
+     * allocations inside LazyColumn rows during 120Hz scrolling).
+     */
+    fun formatGroupedPersianLong(absVal: Long): String {
+        if (absVal == 0L) return "۰"
+        val digits = absVal.toString()
+        val len = digits.length
+        val commaCount = (len - 1) / 3
+        val out = CharArray(len + commaCount)
+        var outIdx = out.size - 1
+        var groupCounter = 0
+        for (i in len - 1 downTo 0) {
+            if (groupCounter == 3) {
+                out[outIdx--] = ','
+                groupCounter = 0
+            }
+            val ch = digits[i]
+            out[outIdx--] = if (ch in '0'..'9') ('۰'.code + (ch - '0')).toChar() else ch
+            groupCounter++
+        }
+        return String(out)
+    }
+
     fun formatToman(
         amount: Long,
         showUnit: Boolean = false,
@@ -67,11 +91,7 @@ object PersianNumberUtils {
             return if (showUnit) "**** تومان" else "****"
         }
         val absVal = kotlin.math.abs(amount)
-        val symbols = DecimalFormatSymbols(Locale.US).apply {
-            groupingSeparator = ','
-        }
-        val formatter = DecimalFormat("#,###", symbols)
-        val formatted = toPersianDigits(formatter.format(absVal))
+        val formatted = formatGroupedPersianLong(absVal)
         val signPrefix = when {
             !showSign -> ""
             amount > 0 -> "+"
@@ -99,11 +119,7 @@ object PersianNumberUtils {
             return if (showUnit) "**** تومان" else "****"
         }
         val absVal = kotlin.math.abs(amount)
-        val symbols = DecimalFormatSymbols(Locale.US).apply {
-            groupingSeparator = ','
-        }
-        val formatter = DecimalFormat("#,###", symbols)
-        val formatted = toPersianDigits(formatter.format(absVal))
+        val formatted = formatGroupedPersianLong(absVal)
         val ltrSignedNumber = "\u2066\u200E+$formatted\u2069"
         return if (showUnit) {
             "$ltrSignedNumber تومان"
@@ -1353,8 +1369,10 @@ data class ParsedVoiceExpense(
     val category: String = "خوراکی و روزمره",
     val merchant: String = "",
     val isIncome: Boolean = false,
-    val commitmentKind: String? = null, // null = regular tx, "DEBT" = بدهی آینده, "RECEIVABLE" = طلب آینده
-    val dueDateHint: String = ""
+    val commitmentKind: String? = null, // null = regular tx, "DEBT" = بدهی/برنامه خرید آینده, "RECEIVABLE" = طلب/درآمد آینده
+    val dueDateHint: String = "",
+    val eventDayOffset: Int = 0,        // e.g. -1 = دیروز/دیشب, -2 = پریروز
+    val commitmentSubLabel: String = "" // e.g. "برنامه خرید", "درآمد آینده", "بدهی", "طلب"
 ) {
     val title: String
         get() = purposeCategory
@@ -1508,6 +1526,13 @@ object PersianVoiceSlangParserEngine {
         "علیکم",
         "درود",
         "والا",
+        "خوب",
+        "خب",
+        "راستی",
+        "ببین",
+        "دیگه",
+        "دیگر",
+        "هم",
         "من",
         "ولی",
         "اما",
@@ -2203,7 +2228,7 @@ object PersianVoiceSlangParserEngine {
     }
 
     private val colloquialMillionMacroRegex = Regex(
-        """(?<=^|\s)(?:حقوق|حقوقم|دستمزد|دستمزدم|عیدی|عیدیم|پاداش|پاداشم|درآمد|درآمدم|اجاره|رهن|ودیعه|پیش‌پرداخت|پیش\s+پرداخت|ماشین|خودرو|خونه|خانه|آپارتمان|ملک|زمین|لپ‌تاپ|لپ\s+تاپ|آیفون|قسط‌های\s+بزرگ|قسط\s+بزرگ|قسط‌های\s+بزرگی|قسط\s+بزرگی|وام\s+بزرگ|قسط\s+مسکن|قسط\s+ماشین|قسط\s+خودرو)(?=\s|$)"""
+        """(?<=^|\s)(?:حقوق|حقوقم|دستمزد|دستمزدم|عیدی|عیدیم|پاداش|پاداشم|درآمد|درآمدم|اجاره|رهن|ودیعه|پیش‌پرداخت|پیش\s+پرداخت|ماشین|خودرو|خونه|خانه|آپارتمان|ملک|زمین|لپ‌تاپ|لپ\s+تاپ|آیفون|دوچرخه|موتور|موتورسیکلت|گوشی|موبایل|تبلت|تلویزیون|یخچال|لباسشویی|کامپیوتر|پلی‌استیشن|مبل|مبلمان|فرش|قسط‌های\s+بزرگ|قسط\s+بزرگ|قسط‌های\s+بزرگی|قسط\s+بزرگی|وام\s+بزرگ|قسط\s+مسکن|قسط\s+ماشین|قسط\s+خودرو)(?=\s|$)"""
     )
 
     private fun shouldInferColloquialMillionScale(clause: String, numVal: Double): Boolean {
@@ -2558,14 +2583,36 @@ object PersianVoiceSlangParserEngine {
         val result = mutableListOf<String>()
         var currentStart = 0
 
+        val trailingTemporalAnchorRegex = Regex(
+            """(?:^|\s)((?:پس‌فردا|پس\s+فردا|فردا|پریروز|دیروز|دیشب|امروز|هفته\s+بعد|هفته\s+آینده|ماه\s+بعد|ماه\s+آینده)(?:\s+(?:هم|دیگه|دیگر))?|بعدش|بعد\s+هم|همچنین)$"""
+        )
+
         for (i in 1 until matches.size) {
             val match = matches[i]
-            val candidateSplitIdx = match.range.first
-            val precedingSegment = trimmed.substring(currentStart, candidateSplitIdx).trim()
+            var candidateSplitIdx = match.range.first
+            var precedingSegment = trimmed.substring(currentStart, candidateSplitIdx).trim()
 
             // Do not split if preceding segment is part of a "که ... دنگ" phrase
             if (precedingSegment.endsWith("که") || precedingSegment.endsWith("و")) {
                 continue
+            }
+
+            // Pull trailing temporal anchors (e.g. "... حقوق گرفتم فردا هم | ۱۵ تومان ...") forward onto the upcoming clause
+            val temporalTailMatch = trailingTemporalAnchorRegex.find(precedingSegment)
+            if (temporalTailMatch != null) {
+                val anchorGroupStartInPreceding = temporalTailMatch.groups[1]?.range?.first ?: -1
+                if (anchorGroupStartInPreceding > 0) {
+                    val trimmedBeforeAnchor = precedingSegment.substring(0, anchorGroupStartInPreceding).trim()
+                    if (trimmedBeforeAnchor.isNotBlank()) {
+                        val rawBeforeMatch = trimmed.substring(currentStart, candidateSplitIdx)
+                        val anchorText = temporalTailMatch.groupValues[1]
+                        val anchorOffsetInRaw = rawBeforeMatch.lastIndexOf(anchorText)
+                        if (anchorOffsetInRaw > 0) {
+                            candidateSplitIdx = currentStart + anchorOffsetInRaw
+                            precedingSegment = trimmedBeforeAnchor
+                        }
+                    }
+                }
             }
 
             val precedingParsed = parseSingleVoiceClause(precedingSegment, null, "نقدی / دستی")
@@ -3042,9 +3089,25 @@ object PersianVoiceSlangParserEngine {
             val microEverydayRegex = Regex("""(?<=^|\s)(?:بستنی|نان|نانوایی|نون|نونوایی|پفک|شارژ|تاکسی|میوه|موز|قهوه|چای|غذا|ناهار|شام|صبحانه|خوراکی|تنقلات)(?=\s|$)""")
             val explicitUnitRegex = Regex("""(?<=^|\s)(?:هزارش|هزاری|هزار|میلیونی|میلیون|ملیون|میلیاردی|میلیارد|ریالش|ریالی|ریال)(?=\s|$)""")
 
+            val continuationIncomeCueRegex = Regex(
+                """(?<=^|\s)(?:دیگه|دیگر|حسابم|کارتم|واریز|حقوق|درآمد|پاداش|میاد|می‌آید|می‌ریزن|میریزن)(?=\s|$)"""
+            )
+
             for (clause in mergedClauses) {
                 var parsed = parseSingleVoiceClause(clause, null, defaultBankName)
                 if (parsed.isIncome && parsed.totalAmountToman > 0L && parsed.purposeCategory.isNotBlank()) {
+                    // Contextual million promotion for follow-up bank inflows after a million-scale income
+                    // (e.g. "پریروز ۳۰ تومن حقوق گرفتم فردا هم ۱۵ تومان دیگه میاد به حسابم" -> 15,000,000 Tomans)
+                    if (lastMillionIncomeToman >= 5_000_000L &&
+                        parsed.totalAmountToman in 1_000L..999_000L &&
+                        parsed.totalAmountToman % 1_000L == 0L &&
+                        !explicitUnitRegex.containsMatchIn(clause) &&
+                        continuationIncomeCueRegex.containsMatchIn(clause) &&
+                        !microEverydayRegex.containsMatchIn(clause)
+                    ) {
+                        val promotedIncome = parsed.totalAmountToman * 1_000L
+                        parsed = parsed.copy(totalAmountToman = promotedIncome, userShareToman = promotedIncome)
+                    }
                     lastIncomeTitle = parsed.purposeCategory
                     if (parsed.totalAmountToman >= 5_000_000L) {
                         lastMillionIncomeToman = parsed.totalAmountToman
@@ -3199,6 +3262,14 @@ object PersianVoiceSlangParserEngine {
         """(?<=^|\s)(?:بدهی\s+دارم|بدهی\s+داریم|بدهکارم|بدهکار\s+هستم|باید\s+بدم|باید\s+بدهم|باید\s+پرداخت\s+کنم|قرض\s+دارم|بدهیم\s+هست|بدهی\s+منه)(?=\s|$)"""
     )
 
+    private val futurePlannedPurchaseRegex = Regex(
+        """(?<=^|\s)(?:می‌خوام|میخوام|می‌خواهم|میخواهم|قراره|قرار\s+است|قصد\s+دارم)(?=\s|$)"""
+    )
+
+    private val futureExpectedInflowRegex = Regex(
+        """(?<=^|\s)(?:میاد\s+(?:به|تو|توی)\s+(?:حسابم|کارتم)|می‌آید\s+(?:به|تو|توی)\s+(?:حسابم|کارتم)|به\s+(?:حسابم|کارتم)\s+میاد|به\s+(?:حسابم|کارتم)\s+می‌آید|می‌ریزن\s+(?:به|تو)\s+(?:حسابم|کارتم)|میریزن\s+(?:به|تو)\s+(?:حسابم|کارتم)|برام\s+می‌ریزن|برام\s+میریزن|قراره\s+واریز\s+(?:بشه|بشود|شه|شود|کنن|کنند)|واریز\s+(?:بشه|بشود|شه|شود|میشه|می‌شه|می‌شود|میشود|خواهد\s+شد|کنن|کنند)|میاد\s+به\s+حساب|می‌آید\s+به\s+حساب)(?=\s|$)"""
+    )
+
     private val futureReceivableClauseRegex = Regex(
         """(?<=^|\s)(?:طلب\s+دارم|طلب\s+داریم|طلبکارم|طلبکار\s+هستم|باید\s+بگیرم|باید\s+بهم\s+بده|باید\s+بهم\s+بدن|قراره\s+بهم\s+بده|قراره\s+بهم\s+بدن|بهم\s+بدهکاره|بهم\s+بدهکارن|به\s+من\s+بدهکاره|طلبم\s+هست|طلب\s+منه)(?=\s|$)"""
     )
@@ -3207,18 +3278,34 @@ object PersianVoiceSlangParserEngine {
         """(?<=^|\s)(پس‌فردا|پس\s+فردا|فردا|هفته\s+بعد|هفته\s+آینده|ماه\s+بعد|ماه\s+آینده)(?=\s|$)"""
     )
 
+    private val pastDayOffsetTwoRegex = Regex("""(?<=^|\s)(?:پریروز|دو\s+روز\s+پیش|۲\s+روز\s+پیش|پریشب)(?=\s|$)""")
+    private val pastDayOffsetOneRegex = Regex("""(?<=^|\s)(?:دیروز|دیشب|یک\s+روز\s+پیش|یه\s+روز\s+پیش)(?=\s|$)""")
+    private val pastDayOffsetThreeRegex = Regex("""(?<=^|\s)(?:سه\s+روز\s+پیش|۳\s+روز\s+پیش)(?=\s|$)""")
+
+    fun extractPastRelativeDayOffset(rawSpeech: String): Int {
+        val norm = PersianNumberUtils.normalizePersianText(rawSpeech.trim())
+        return when {
+            pastDayOffsetThreeRegex.containsMatchIn(norm) -> -3
+            pastDayOffsetTwoRegex.containsMatchIn(norm) -> -2
+            pastDayOffsetOneRegex.containsMatchIn(norm) -> -1
+            else -> 0
+        }
+    }
+
     /**
-     * Detects whether a spoken clause describes an unpaid/future personal obligation
-     * (`"DEBT"` for بدهی دارم / بدهکارم, `"RECEIVABLE"` for طلب دارم / طلبکارم)
-     * rather than an already-settled transaction (`بدهی رو دادم` / `طلبم رو گرفتم`).
+     * Detects whether a spoken clause describes an unpaid/future obligation, expected future inflow,
+     * or future planned purchase (`"DEBT"` or `"RECEIVABLE"`) rather than an already-settled transaction.
      */
     fun detectVoiceCommitmentKind(rawSpeech: String): String? {
         val norm = PersianNumberUtils.normalizePersianText(rawSpeech.trim())
         if (norm.isBlank()) return null
+        if (isNegatedOrCancelledClause(norm)) return null
         if (settledObligationVerbRegex.containsMatchIn(norm)) return null
         return when {
             futureReceivableClauseRegex.containsMatchIn(norm) -> "RECEIVABLE"
+            futureExpectedInflowRegex.containsMatchIn(norm) -> "RECEIVABLE"
             futureDebtClauseRegex.containsMatchIn(norm) -> "DEBT"
+            futurePlannedPurchaseRegex.containsMatchIn(norm) -> "DEBT"
             else -> null
         }
     }
@@ -3233,10 +3320,28 @@ object PersianVoiceSlangParserEngine {
         )
         val isTaggingExistingSms = fallbackTotalToman != null && fallbackTotalToman > 0L
         val detectedCommitmentKind = if (isTaggingExistingSms) null else detectVoiceCommitmentKind(rawSpeech)
+        val isExpectedFutureInflow = detectedCommitmentKind == "RECEIVABLE" &&
+            futureExpectedInflowRegex.containsMatchIn(cleaned) &&
+            !futureReceivableClauseRegex.containsMatchIn(cleaned)
+        val isPlannedFuturePurchase = detectedCommitmentKind == "DEBT" &&
+            futurePlannedPurchaseRegex.containsMatchIn(cleaned) &&
+            !futureDebtClauseRegex.containsMatchIn(cleaned)
+        val commitmentSubLabel = when {
+            isExpectedFutureInflow -> "واریز آینده"
+            isPlannedFuturePurchase -> "برنامه خرید"
+            detectedCommitmentKind == "RECEIVABLE" -> "طلب"
+            detectedCommitmentKind == "DEBT" -> "بدهی"
+            else -> ""
+        }
         val extractedDueDateHint = if (detectedCommitmentKind != null) {
             dueDateHintRegex.find(cleaned)?.groupValues?.get(1)?.replace(whitespaceRegex, " ")?.trim().orEmpty()
         } else {
             ""
+        }
+        val extractedPastDayOffset = if (isTaggingExistingSms || detectedCommitmentKind != null) {
+            0
+        } else {
+            extractPastRelativeDayOffset(rawSpeech)
         }
         val isIncomeClause = when {
             isTaggingExistingSms -> false
@@ -3371,7 +3476,9 @@ object PersianVoiceSlangParserEngine {
         if (detectedCommitmentKind != null) {
             corePhrase = corePhrase
                 .replace(dueDateHintRegex, " ")
-                .replace(Regex("""(?<=^|\s)(?:دارم|داریم|هستم|هست|باید\s+بدم|باید\s+بدهم|باید\s+پرداخت\s+کنم|باید\s+بگیرم|قراره\s+بهم\s+بده|قراره\s+بهم\s+بدن|باید\s+بهم\s+بده|باید\s+بهم\s+بدن)(?=\s|$)"""), " ")
+                .replace(futureExpectedInflowRegex, " ")
+                .replace(futurePlannedPurchaseRegex, " ")
+                .replace(Regex("""(?<=^|\s)(?:دارم|داریم|هستم|هست|باید\s+بدم|باید\s+بدهم|باید\s+پرداخت\s+کنم|باید\s+بگیرم|قراره\s+بهم\s+بده|قراره\s+بهم\s+بدن|باید\s+بهم\s+بده|باید\s+بهم\s+بدن|بخرم|بگیرم|بدم|بدهم|پرداخت\s+کنم|خرج\s+کنم)(?=\s|$)"""), " ")
                 .replace(Regex("""(?<=^|\s)(?:بدهکارم|بدهکار)(?=\s|$)"""), " بدهی ")
                 .replace(Regex("""(?<=^|\s)(?:طلبکارم|طلبکار)(?=\s|$)"""), " طلب ")
                 .replace(Regex("""(?<=^|\s)به\s+([ء-ۿ\u200C]+)\s+بدهی(?=\s|$)"""), "بدهی به $1")
@@ -3437,9 +3544,14 @@ object PersianVoiceSlangParserEngine {
             else -> rawCleanedPurpose
         }
         val purposeCategory = if (detectedCommitmentKind != null) {
+            val cleanCommitmentTitle = cleanedPurpose
+                .replace(Regex("""^(?:به\s+)?(?:یه|یک|۱)\s+"""), "")
+                .trim()
             when {
-                cleanedPurpose.isBlank() -> if (detectedCommitmentKind == "RECEIVABLE") "طلب" else "بدهی"
-                else -> cleanedPurpose
+                cleanCommitmentTitle.isBlank() && isExpectedFutureInflow -> "واریز به حساب"
+                cleanCommitmentTitle.isBlank() && isPlannedFuturePurchase -> "خرید برنامه‌ریزی‌شده"
+                cleanCommitmentTitle.isBlank() -> if (detectedCommitmentKind == "RECEIVABLE") "طلب" else "بدهی"
+                else -> cleanCommitmentTitle
             }
         } else if (isIncomeClause) {
             val saleNormalized = if (hasSaleVerb) {
@@ -3467,9 +3579,11 @@ object PersianVoiceSlangParserEngine {
         }
         val safeDongAmount = dongAmount.coerceIn(0L, totalToman)
         val userShare = (totalToman - safeDongAmount).coerceAtLeast(0L)
-        val category = when (detectedCommitmentKind) {
-            "DEBT" -> "تعهدات (بدهی)"
-            "RECEIVABLE" -> "تعهدات (طلب)"
+        val category = when {
+            isExpectedFutureInflow -> "تعهدات (واریز آینده)"
+            isPlannedFuturePurchase -> "تعهدات (برنامه خرید)"
+            detectedCommitmentKind == "DEBT" -> "تعهدات (بدهی)"
+            detectedCommitmentKind == "RECEIVABLE" -> "تعهدات (طلب)"
             else -> inferExpenseCategory(purposeCategory, isIncome = isIncomeClause)
         }
 
@@ -3486,7 +3600,9 @@ object PersianVoiceSlangParserEngine {
             merchant = detectedBrand,
             isIncome = isIncomeClause,
             commitmentKind = detectedCommitmentKind,
-            dueDateHint = extractedDueDateHint
+            dueDateHint = extractedDueDateHint,
+            eventDayOffset = extractedPastDayOffset,
+            commitmentSubLabel = commitmentSubLabel
         )
     }
 

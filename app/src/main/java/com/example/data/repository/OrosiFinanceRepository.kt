@@ -1529,20 +1529,32 @@ class OrosiFinanceRepository(
             if (item.commitmentKind == "RECEIVABLE") "طلب" else "بدهی"
         }
         val isReceivable = item.commitmentKind == "RECEIVABLE" || item.isIncome
+        val subTag = item.commitmentSubLabel.trim()
         val resolvedJalaliDate = if (item.dueDateHint.isNotBlank()) {
             "${item.dueDateHint} • ${JalaliCalendarUtils.resolveRelativeJalaliDate(item.dueDateHint, timestampMillis)}"
         } else {
             JalaliCalendarUtils.timestampToJalali(timestampMillis).dateWithYear
         }
+        val counterpartyLabel = when {
+            subTag.isNotBlank() -> "$subTag • ثبت صوتی"
+            isReceivable -> "طلب دارم • ثبت صوتی"
+            else -> "بدهی دارم • ثبت صوتی"
+        }
+        val statusLabel = when {
+            subTag == "برنامه خرید" -> "برنامه خرید (تعهد آینده)"
+            subTag == "واریز آینده" -> "واریز آینده (دریافتنی)"
+            isReceivable -> "طلب دارم (دریافتنی)"
+            else -> "بدهی دارم (پرداختنی)"
+        }
         dao.insertCommitment(
             CommitmentEntity(
                 category = "DONG",
                 title = cleanPurpose,
-                counterparty = if (isReceivable) "طلب دارم • ثبت صوتی" else "بدهی دارم • ثبت صوتی",
+                counterparty = counterpartyLabel,
                 amountToman = item.totalAmountToman,
                 dueDateStr = resolvedJalaliDate,
                 sayyadId = "",
-                statusText = if (isReceivable) "طلب دارم (دریافتنی)" else "بدهی دارم (پرداختنی)",
+                statusText = statusLabel,
                 isSettled = false,
                 timestamp = timestampMillis
             )
@@ -1550,15 +1562,16 @@ class OrosiFinanceRepository(
     }
 
     /**
-     * Inserts multiple voice expenses and/or future commitments (بدهی / طلب) when the user speaks
-     * a multi-clause sentence in "+ ثبت صوتی" mode.
+     * Inserts multiple voice expenses and/or future commitments (بدهی / طلب / برنامه خرید / واریز آینده)
+     * when the user speaks a multi-clause sentence in "+ ثبت صوتی" mode.
+     * Past relative anchors (`دیروز`, `پریروز`, etc.) are applied via `item.eventDayOffset` so the
+     * transaction lands on its true Jalali date.
      */
     suspend fun confirmMultiVoiceExpenses(items: List<ParsedVoiceExpense>) {
         val validItems = items.filter { it.totalAmountToman > 0L && it.purposeCategory.isNotBlank() }
         if (validItems.isEmpty()) return
 
         val baseNow = System.currentTimeMillis()
-        val nowJalali = JalaliCalendarUtils.timestampToJalali(baseNow)
         val manualBankLabel = "نقدی / دستی"
 
         validItems.forEachIndexed { index, item ->
@@ -1567,6 +1580,8 @@ class OrosiFinanceRepository(
                 return@forEachIndexed
             }
 
+            val effectiveTimestamp = baseNow + item.eventDayOffset * 86_400_000L + index
+            val effectiveJalali = JalaliCalendarUtils.timestampToJalali(effectiveTimestamp)
             val cleanPurpose = item.purposeCategory.trim()
             val resolvedStore = item.merchant.trim()
                 .ifBlank { item.storeName.trim() }
@@ -1582,12 +1597,12 @@ class OrosiFinanceRepository(
                     userShareToman = item.totalAmountToman,
                     dongAmountToman = 0L,
                     dongFriendName = "",
-                    weekdayDate = nowJalali.weekdayDate,
-                    timeStr = nowJalali.timeStr,
+                    weekdayDate = effectiveJalali.weekdayDate,
+                    timeStr = effectiveJalali.timeStr,
                     cardInfo = manualBankLabel,
                     type = if (item.isIncome) "INCOME" else "EXPENSE",
                     isUntagged = false,
-                    timestamp = baseNow + index,
+                    timestamp = effectiveTimestamp,
                     rawSmsBody = "",
                     bankName = manualBankLabel
                 )
@@ -1599,19 +1614,20 @@ class OrosiFinanceRepository(
     }
 
     /**
-     * Saves a voice-tagged expense, future commitment (بدهی/طلب), or updates an untagged SMS transaction.
+     * Saves a voice-tagged expense, future commitment (بدهی/طلب/برنامه خرید/واریز آینده), or updates an untagged SMS transaction.
      * - When tagging an existing bank SMS (`targetUntaggedTransactionId != null`), updates BOTH
      *   `tx.title` and `tx.purpose` and sets `isUntagged = false`—NEVER changes its bank amount or bank name!
      * - When creating a new manual voice entry (`targetUntaggedTransactionId == null`),
      *   future obligations (`isCommitment == true`) route directly to Room `commitments` (`DONG` tab),
-     *   while completed transactions save to Room `transactions`.
+     *   while completed transactions save to Room `transactions` with their real relative date (`eventDayOffset`).
      */
     suspend fun confirmVoiceExpense(
         parsedVoice: ParsedVoiceExpense,
         targetUntaggedTransactionId: Long? = null
     ) {
         val now = System.currentTimeMillis()
-        val nowJalali = JalaliCalendarUtils.timestampToJalali(now)
+        val effectiveTimestamp = now + parsedVoice.eventDayOffset * 86_400_000L
+        val effectiveJalali = JalaliCalendarUtils.timestampToJalali(effectiveTimestamp)
 
         val cleanPurpose = parsedVoice.purposeCategory.trim()
         if (cleanPurpose.isBlank()) return
@@ -1665,7 +1681,7 @@ class OrosiFinanceRepository(
         // Manual cash/voice entry: block saving if amount <= 0L!
         if (parsedVoice.totalAmountToman <= 0L) return
 
-        // Route future debt / receivable directly to Commitments ("بدهی و طلب")
+        // Route future debt / receivable / planned purchase / expected inflow directly to Commitments ("بدهی و طلب")
         if (parsedVoice.isCommitment) {
             insertVoiceCommitment(parsedVoice, now)
             recalculateRealSafeToSpend()
@@ -1696,12 +1712,12 @@ class OrosiFinanceRepository(
                 userShareToman = effectiveUserShare,
                 dongAmountToman = effectiveDong,
                 dongFriendName = parsedVoice.dongFriendName,
-                weekdayDate = nowJalali.weekdayDate,
-                timeStr = nowJalali.timeStr,
+                weekdayDate = effectiveJalali.weekdayDate,
+                timeStr = effectiveJalali.timeStr,
                 cardInfo = manualBankLabel,
                 type = if (parsedVoice.isIncome) "INCOME" else "EXPENSE",
                 isUntagged = false,
-                timestamp = now,
+                timestamp = effectiveTimestamp,
                 rawSmsBody = "",
                 bankName = manualBankLabel
             )
@@ -1714,11 +1730,11 @@ class OrosiFinanceRepository(
                     title = "دنگ $cleanPurpose",
                     counterparty = "طلب دارم • سهم ${parsedVoice.dongFriendName} • $manualBankLabel",
                     amountToman = effectiveDong,
-                    dueDateStr = "${nowJalali.weekdayDate} • ${nowJalali.timeStr}",
+                    dueDateStr = "${effectiveJalali.weekdayDate} • ${effectiveJalali.timeStr}",
                     sayyadId = "",
                     statusText = "طلب دارم (به من بدهکار است) • ${parsedVoice.dongFriendName}",
                     isSettled = false,
-                    timestamp = now
+                    timestamp = effectiveTimestamp
                 )
             )
         }
