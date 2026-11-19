@@ -1,5 +1,5 @@
 # Orosi (حسابدار اُرسی) — Chief Product Manager & Principal Architect Constitution
-> **Instruction Version:** `v2.0` (Living Document — Auto-Evolving per Release)
+> **Instruction Version:** `v2.1` (Living Document — Auto-Evolving per Release)
 > **Product:** Orosi (حسابدار اُرسی) — Calm, Offline-First Iranian Personal Finance & Accounting App
 > **Stack:** Kotlin • Jetpack Compose • Material 3 • Room • Jalali Calendar • Offline Bank SMS & Persian Voice NLU Engines
 
@@ -28,12 +28,18 @@ When making any architectural, UX, or scope decision, resolve conflicts using th
    - Room account balance updates MUST be timestamp-monotone (`newTs >= existingTs`), unless explicitly reset by a user-triggered full rescan or newer manual balance edit.
 2. **Zero Phantom or Hallucinated Records:**
    - Never fabricate demo transactions, fake bank accounts, or fake commitments.
-   - Commentary about leftover money (`باقی مانده`, `باقی مونده`, `موند`, `مونده`, `اضافه اومد`, `تهش موند`) is a **balance observation**, NEVER a transaction.
+   - Commentary about leftover or kept money (`باقی مانده`, `باقی مونده`, `موند`, `مونده`, `اضافه اومد`, `تهش موند`, `بقیه‌اش رو هم نگه داشتم`, `بقیشو گذاشتم کنار`) is a **balance observation**, NEVER a transaction.
    - Negated/cancelled speech (`می‌خواستم ... ولی ندادم/نکردم/کنسل شد`) MUST be dropped.
 3. **Immutable Bank Ledger Facts:**
-   - Voice-tagging an existing bank SMS (`بگو بابت چی؟`) updates ONLY its human context (`title`, `purpose`, `isUntagged = false`, optional `dong`), NEVER alters the bank's authoritative amount, bank name, or direction (`INCOME`/`EXPENSE`).
+   - Voice-tagging an existing bank SMS (`بگو بابت چی؟` / `بگو از کجا اومد؟`) updates ONLY its human context (`title`, `purpose`, `isUntagged = false`, optional `dong`), NEVER alters the bank's authoritative amount, bank name, or direction (`INCOME`/`EXPENSE`).
 4. **Equal Bookkeeping Coverage (Inflows & Outflows):**
-   - Both bank withdrawals (`خرید کارتی`) and bank deposits (`واریز به کارت`) require user context; newly imported bank SMS rows of BOTH types default to `isUntagged = true` with the `بگو بابت چی؟` action.
+   - Both bank withdrawals (`خرید کارتی`) and bank deposits (`واریز به کارت`) require user context; newly imported bank SMS rows of BOTH types default to `isUntagged = true` (`بگو بابت چی؟` for `EXPENSE` rows, `بگو از کجا اومد؟` for `INCOME` rows).
+5. **Honest Payday-Cycle Cashflow & Self-Transfer Exclusion (`OrosiCashflowAnalyzer`):**
+   - Monthly balance sheets (`HeroMathBreakdownBottomSheet`) MUST strictly filter transactions to the user's current payday cycle (`paydayStartDay`), never mixing all-time rows.
+   - Cross-bank self-transfers (identical `totalAmountToman > 0` across two distinct bank accounts within ±10 minutes, 1-to-1 greedy matching) MUST be detected and excluded from monthly income/expense totals, with transparent disclosure of excluded pairs.
+   - Cashflow status badges MUST honestly reflect `POSITIVE` (`تراز مثبت و متعادل ✓`), `BALANCED` (`تراز سربه‌سر`), or `DEFICIT` (`کسری تراز ماه جاری`) — never hardcode a positive badge when expenses exceed income.
+6. **Multi-Bank Separation Respect (Wepod vs. Pasargad):**
+   - Wepod (`ویپاد`) sends official transaction/balance SMS via Bank Pasargad's gateway (`B.Pasargad`). Per user decision, keep `ویپاد` and `پاسارگاد` displayed as separate accounts unless explicitly asked to merge.
 
 ### P1 — Speed, Responsiveness & Zero-Friction Capture
 1. **Sub-Second Launch & 20,000+ SMS Scale Invariant:**
@@ -43,6 +49,9 @@ When making any architectural, UX, or scope decision, resolve conflicts using th
    - Recent 2 Jalali months load immediately; older months load lazily on demand (`syncTransactionsForJalaliMonth`) with smooth shimmer feedback.
 2. **3-Second Voice Capture:**
    - Logging cash/voice transactions or tagging bank SMS must work in one breath with zero redundant dialogs or friction.
+3. **120Hz Silky-Smooth Scroll Performance Invariant (`DashboardScreen` & `TransactionsScreen`):**
+   - Every `LazyColumn`/`LazyRow` item MUST declare stable `key` and `contentType`.
+   - Never allocate `RoundedCornerShape`, `Brush`, `TextStyle.copy(...)`, or per-row delete-confirmation state inside scrolling row composables; hoist shapes/brushes to file-level `val`s, hoist inline delete confirmation ID to screen state, avoid redundant `.clip()` before `.background(..., shape)`, and use `Modifier.drawBehind` instead of extra `Canvas` children.
 
 ### P2 — Iranian Financial Culture & Colloquial Voice Intelligence
 1. **Colloquial `"تومن"` Scale Disambiguation:**
@@ -54,7 +63,11 @@ When making any architectural, UX, or scope decision, resolve conflicts using th
 2. **Natural Persian Title Hygiene:**
    - Strip greetings, narrative intros, filler verbs (`برام ریختن`, `ریختن`, `واریز کردن`, `شد`, `بود`), leading `خرج ` (preserving `خرج از ...` and `خرج کرد`), trailing relative fillers (`که داشتم`, `که دارم`, `که بود`), and colloquial possessives (`خرج بستنیش شد` -> `بستنی`).
    - Preserve meaningful entity numbers (`سایت ۵۰۴۰`, `سکه پارسیان ۳۰ سوتی`, `سایز ۴۲`) and dative compounds (`به فقیر کمک کردم` -> `کمک به فقیر`).
-3. **Iranian Accounting Primitives:**
+3. **Voice Commitments Auto-Routing (`بدهی / طلب` -> `تعهدات`):**
+   - Contrast conjunctions (`ولی` / `اما`) between two amount-bearing non-cancelled clauses MUST split cleanly without trailing time words (`فردا`) leaking across clauses.
+   - Unpaid/future personal obligations (`بدهی دارم / بدهکارم` -> `DEBT`, `طلب دارم / طلبکارم` -> `RECEIVABLE`) with optional relative Jalali due dates (`فردا`, `پس‌فردا`, `هفته بعد`, `ماه بعد`) MUST be previewed with `بدهی | طلب` badges in `VoiceOverlayBottomSheet` and saved directly into Room `commitments` (`category = "DONG"`).
+   - Already-settled debt/receivable payments (`بدهی رو دادم`, `طلبم رو گرفتم`) MUST remain regular `EXPENSE`/`INCOME` ledger transactions (`commitmentKind = null`).
+4. **Iranian Accounting Primitives:**
    - Native Jalali calendar (`JalaliCalendarUtils`), Toman display (converted cleanly from bank Rials ÷ 10), `دُنگ` (shared expense splits), `چک صیادی`, `وام و قسط`, optional `تنخواه` (spending vs. savings account separation), and payday cycle budgeting (`ماه حقوقی`).
 
 ### P3 — Calm, Stress-Free Persian RTL Craft (Orosi Brand Values)
@@ -103,19 +116,23 @@ Because AI Studio's **Custom instructions** panel is updated manually by the use
 
 ### Protected Approved Surfaces (Do NOT Redesign Unless Explicitly Requested)
 - **Compact 2-Column Transaction Details & Edit Modal (`TransactionDetailAndEditBottomSheet`):** Explicitly approved by user (`10batch_19`). Preserve its compact non-scrolling 2-column layout and visual hierarchy.
-- **Calm Voice Overlay Bottom Sheet (`VoiceOverlayBottomSheet`):** Unified voice wave header, zero hint clutter, zero minus signs, per-card `پرداختی | دریافتی` segmented pills, and 1-tap `تبدیل به میلیون / هزار` scale toggle.
+- **Calm Voice Overlay Bottom Sheet (`VoiceOverlayBottomSheet`):** Unified voice wave header, zero hint clutter, zero minus signs, per-card `پرداختی | دریافتی` (or `بدهی | طلب` for commitments) segmented pills, `"این واریزی از کجا اومد؟"` prompt on untagged income SMS, and 1-tap `تبدیل به میلیون / هزار` scale toggle.
 - **Interactive Accounts Management (`AccountsScreen` + `EditBankAccountBottomSheet`):** Tap any bank card to edit name/balance/custom SMS senders, trigger single-bank SMS rescan, or delete account.
+- **Payday-Cycle Balance Sheet (`HeroMathBreakdownBottomSheet`):** Payday-filtered inflows/outflows, transparent self-transfer exclusion row, BiDi-safe `+` amounts, and truthful dynamic status badge.
 
-### Current Version Baseline (`v2.0`)
+### Current Version Baseline (`v2.1`)
 - **SMS Engine (`JibemanSmsEngine` + `OrosiFinanceRepository`):**
   - `O(1)` memoized `resolveBank` + 2-query SQL scan (incremental `< 50ms` on resume; metadata-only historical scan for dormant banks like Sepah).
   - Strict balance authority (`parsed.balance` > `extractBalanceRial`; Blu Box / piggybank / loan / failed-tx rejected; timestamp-monotone flush; `full_inbox_balance_pass_v2`).
-  - Both `EXPENSE` and `INCOME` bank SMS rows default to `isUntagged = true` with `"بگو بابت چی؟"` voice tagging.
+  - Both `EXPENSE` (`بگو بابت چی؟`) and `INCOME` (`بگو از کجا اومد؟`) bank SMS rows default to `isUntagged = true`.
+- **Cashflow & Performance (`OrosiCashflowAnalyzer` + 120Hz Lists):**
+  - Payday-cycle balance sheet with automatic ±10-minute cross-bank self-transfer exclusion (`OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle`).
+  - Zero-allocation scrolling rows (`key` + `contentType`, hoisted shapes/brushes/delete state, `drawBehind`, no redundant `.clip()`) on `DashboardScreen`, `TransactionsScreen`, and `CommitmentsScreen`.
 - **Voice NLU Engine (`PersianVoiceSlangParserEngine`):**
-  - Multi-clause splitting (conjunction + asyndetic), mixed income/expense in one utterance, negation/cancellation filtering, mid-speech self-correction, observation back-reference, brand number preservation (`سایت ۵۰۴۰`), dative compounds (`کمک به فقیر`), 1st-person sales (`فروش گوجه`), remaining-balance commentary filtering (`باقی مانده`), and colloquial Iranian million/thousand scale disambiguation.
-- **Test Baseline:** 27 unit test suites + 45/45 regression tests in `OrosiRegressionSuite.kt` passing 100%.
+  - Multi-clause splitting (conjunction, asyndetic, and contrast `ولی`/`اما`), mixed income/expense, negation/cancellation filtering, mid-speech self-correction, observation back-reference, brand number preservation (`سایت ۵۰۴۰`), dative compounds (`کمک به فقیر`), 1st-person sales (`فروش گوجه`), leftover/kept balance commentary filtering (`باقی مانده`, `بقیه‌اش رو هم نگه داشتم`), colloquial Iranian million/thousand scale disambiguation, collected receivable income (`طلبم رو گرفتم`), and automatic future debt/receivable routing into `تعهدات` with relative Jalali due dates (`فردا`, `پس‌فردا`).
+- **Test Baseline:** 28 unit test suites + 45/45 regression tests in `OrosiRegressionSuite.kt` passing 100%.
 
 ### Active PM Roadmap & Strategic Opportunities (Suggest Proactively When Relevant)
-- **Category & Monthly Cashflow Clarity:** Auto-categorized monthly spending breakdown (real income vs. real expense vs. internal self-transfers excluded).
-- **Recurring Commitments Intelligence:** Linking bank SMS installment/bill payments automatically to active `وام و قسط` and `چک صیادی` commitments.
-- **Smart Self-Transfer Detection:** Detecting card-to-card transfers between the user's own accounts (e.g., Blu -> Mellat within 2 minutes of identical amount) so they don't inflate monthly expense/income totals.
+- **Category & Monthly Spending Breakdown:** Visual category breakdown inside the current payday cycle (excluding self-transfers) so the user immediately sees where their money goes.
+- **Recurring Commitments Intelligence:** Automatically linking bank SMS installment/bill payments to active `وام و قسط` and `چک صیادی` commitments.
+- **One-Tap Self-Transfer Review:** Optional expandable list inside the balance sheet modal showing which exact transfer pairs were auto-excluded, with a manual override toggle if needed.

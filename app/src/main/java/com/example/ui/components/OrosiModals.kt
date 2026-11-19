@@ -103,7 +103,10 @@ import com.example.data.local.AppSettingsEntity
 import com.example.data.local.BankAccountEntity
 import com.example.data.local.CommitmentEntity
 import com.example.data.local.TransactionEntity
+import com.example.domain.CashflowHealthStatus
+import com.example.domain.CashflowTxSnapshot
 import com.example.domain.JalaliCalendarUtils
+import com.example.domain.OrosiCashflowAnalyzer
 import com.example.domain.OrosiRegressionSuite
 import com.example.domain.PersianNumberUtils
 import com.example.domain.RegressionSuiteReport
@@ -574,19 +577,25 @@ fun VoiceOverlayBottomSheet(
                 ),
                 label = {
                     Text(
-                        if (targetTx != null) {
-                            "بابتِ این تراکنش بانکی (مثلاً: پفک، شارژ ایرانسل)"
-                        } else {
-                            "جمله یا توضیح تراکنش (مثلاً: ۷۰ تومن نانوایی)"
+                        when {
+                            targetTx != null && targetTx.type == "INCOME" ->
+                                "این واریزی از کجا اومد؟ (مثلاً: حقوق، تسویه علی)"
+                            targetTx != null ->
+                                "بابتِ این تراکنش بانکی (مثلاً: پفک، شارژ ایرانسل)"
+                            else ->
+                                "جمله یا توضیح تراکنش (مثلاً: ۷۰ تومن نانوایی)"
                         }
                     )
                 },
                 placeholder = {
                     Text(
-                        if (targetTx != null) {
-                            "مثلاً: پفک، شارژ ایرانسل، نانوایی..."
-                        } else {
-                            "مثلاً: ۷۰ تومن نانوایی یا ۵۰ تومن بستنی و ۳۵ تومن طلب..."
+                        when {
+                            targetTx != null && targetTx.type == "INCOME" ->
+                                "مثلاً: حقوق، واریز کارفرما، برگشت پول..."
+                            targetTx != null ->
+                                "مثلاً: پفک، شارژ ایرانسل، نانوایی..."
+                            else ->
+                                "مثلاً: ۷۰ تومن نانوایی یا ۵۰ تومن طلب دارم..."
                         }
                     )
                 },
@@ -614,12 +623,19 @@ fun VoiceOverlayBottomSheet(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 if (hasMultiItems) {
-                    Text(
-                        text = if (targetTx != null) {
+                    val commMultiCount = multiItems.count { it.isCommitment }
+                    val multiHeaderText = when {
+                        targetTx != null ->
                             "${PersianNumberUtils.toPersianDigits(multiItems.size.toString())} مورد از مبلغ بانک تفکیک شد (قابل ویرایش):"
-                        } else {
+                        commMultiCount == multiItems.size ->
+                            "${PersianNumberUtils.toPersianDigits(multiItems.size.toString())} تعهد (ثبت در بدهی و طلب) تشخیص داده شد:"
+                        commMultiCount > 0 ->
+                            "${PersianNumberUtils.toPersianDigits(multiItems.size.toString())} مورد (تراکنش و تعهد) تشخیص داده شد:"
+                        else ->
                             "${PersianNumberUtils.toPersianDigits(multiItems.size.toString())} تراکنش مجزا تشخیص داده شد (قابل ویرایش):"
-                        },
+                    }
+                    Text(
+                        text = multiHeaderText,
                         style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold),
                         color = NishapurTurquoiseSoft,
                         modifier = Modifier.testTag("recognized_speech_text")
@@ -636,10 +652,12 @@ fun VoiceOverlayBottomSheet(
                             )
                         }
 
-                        val itemBorderColor = if (item.isIncome) {
-                            NishapurTurquoiseBright.copy(alpha = 0.45f)
-                        } else {
-                            RubyRoseSoft.copy(alpha = 0.40f)
+                        val isCommItem = targetTx == null && item.isCommitment
+                        val itemBorderColor = when {
+                            isCommItem && item.isIncome -> NishapurTurquoiseBright.copy(alpha = 0.55f)
+                            isCommItem -> RoyalAmethystSoft.copy(alpha = 0.55f)
+                            item.isIncome -> NishapurTurquoiseBright.copy(alpha = 0.45f)
+                            else -> RubyRoseSoft.copy(alpha = 0.40f)
                         }
 
                         Column(
@@ -677,7 +695,8 @@ fun VoiceOverlayBottomSheet(
                                         )
                                     }
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    // Clear 2-way segmented toggle in every multi-item card header: "پرداختی" | "دریافتی" (zero minus signs)
+                                    // Clear 2-way segmented toggle in every multi-item card header:
+                                    // "بدهی" | "طلب" for commitments, or "پرداختی" | "دریافتی" for regular transactions (zero minus signs)
                                     Row(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(50))
@@ -704,7 +723,7 @@ fun VoiceOverlayBottomSheet(
                                                 .testTag("multi_voice_item_expense_$idx")
                                         ) {
                                             Text(
-                                                text = "پرداختی",
+                                                text = if (isCommItem) "بدهی" else "پرداختی",
                                                 style = MaterialTheme.typography.labelSmall.copy(
                                                     fontWeight = if (!item.isIncome) FontWeight.ExtraBold else FontWeight.Medium
                                                 ),
@@ -729,7 +748,7 @@ fun VoiceOverlayBottomSheet(
                                                 .testTag("multi_voice_item_income_$idx")
                                         ) {
                                             Text(
-                                                text = "دریافتی",
+                                                text = if (isCommItem) "طلب" else "دریافتی",
                                                 style = MaterialTheme.typography.labelSmall.copy(
                                                     fontWeight = if (item.isIncome) FontWeight.ExtraBold else FontWeight.Medium
                                                 ),
@@ -739,9 +758,27 @@ fun VoiceOverlayBottomSheet(
                                             )
                                         }
                                     }
+                                    if (isCommItem) {
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(50))
+                                                .background(RoyalAmethyst.copy(alpha = 0.28f))
+                                                .border(1.dp, RoyalAmethystSoft.copy(alpha = 0.55f), RoundedCornerShape(50))
+                                                .padding(horizontal = 7.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(
+                                                text = if (item.dueDateHint.isNotBlank()) "تعهد • ${item.dueDateHint}" else "تعهد",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                                                color = RoyalAmethystSoft,
+                                                maxLines = 1,
+                                                softWrap = false
+                                            )
+                                        }
+                                    }
                                 }
                                 Text(
-                                    text = if (item.isIncome) {
+                                    text = if (item.isIncome && !isCommItem) {
                                         PersianNumberUtils.formatIncomeToman(item.amountToman, showUnit = true)
                                     } else {
                                         PersianNumberUtils.formatToman(item.amountToman, showUnit = true)
@@ -877,7 +914,8 @@ fun VoiceOverlayBottomSheet(
                     }
                 } else {
                     if (targetTx == null) {
-                        // Stable, non-jumping header label for single new transaction
+                        // Stable, non-jumping header label for single new transaction or commitment
+                        val isSingleCommitment = voiceState.commitmentKind != null
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -886,12 +924,25 @@ fun VoiceOverlayBottomSheet(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "مشخصات تراکنش (قابل ویرایش):",
+                                text = if (isSingleCommitment) {
+                                    if (voiceState.dueDateHint.isNotBlank()) {
+                                        "ثبت در تعهدات • سررسید: ${voiceState.dueDateHint}"
+                                    } else {
+                                        "ثبت در بخش تعهدات (بدهی و طلب):"
+                                    }
+                                } else {
+                                    "مشخصات تراکنش (قابل ویرایش):"
+                                },
                                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                color = OrosiOnSurfaceVariant
+                                color = if (isSingleCommitment) RoyalAmethystSoft else OrosiOnSurfaceVariant
                             )
                             Text(
-                                text = if (voiceState.isIncome) "نوع: دریافتی" else "نوع: پرداختی",
+                                text = when {
+                                    isSingleCommitment && voiceState.isIncome -> "تعهد: طلب"
+                                    isSingleCommitment -> "تعهد: بدهی"
+                                    voiceState.isIncome -> "نوع: دریافتی"
+                                    else -> "نوع: پرداختی"
+                                },
                                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
                                 color = if (voiceState.isIncome) NishapurTurquoiseSoft else RubyRoseSoft
                             )
@@ -1112,7 +1163,18 @@ fun VoiceOverlayBottomSheet(
             Spacer(modifier = Modifier.height(14.dp))
 
             val confirmButtonLabel = if (isMultiNewMode) {
-                "تأیید و ثبت (${PersianNumberUtils.toPersianDigits(multiItems.size.toString())} تراکنش)"
+                val commCount = multiItems.count { it.isCommitment }
+                val txCount = multiItems.size - commCount
+                when {
+                    commCount == multiItems.size ->
+                        "تأیید و ثبت (${PersianNumberUtils.toPersianDigits(commCount.toString())} تعهد)"
+                    commCount > 0 ->
+                        "تأیید و ثبت (${PersianNumberUtils.toPersianDigits(txCount.toString())} تراکنش و ${PersianNumberUtils.toPersianDigits(commCount.toString())} تعهد)"
+                    else ->
+                        "تأیید و ثبت (${PersianNumberUtils.toPersianDigits(multiItems.size.toString())} تراکنش)"
+                }
+            } else if (targetTx == null && voiceState.commitmentKind != null) {
+                "تأیید و ثبت در تعهدات"
             } else {
                 "تأیید و ثبت"
             }
@@ -1149,6 +1211,13 @@ fun VoiceOverlayBottomSheet(
     }
 }
 
+private data class CashflowBadgeVisuals(
+    val label: String,
+    val bg: Color,
+    val border: Color,
+    val textColor: Color
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HeroMathBreakdownBottomSheet(
@@ -1159,11 +1228,42 @@ fun HeroMathBreakdownBottomSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    val totalIncomeToman = remember(transactions) {
-        transactions.filter { it.type == "INCOME" }.sumOf { it.userShareToman }
+    val summary = remember(transactions, settings.paydayStartDay, reservedCommitmentsToman) {
+        OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle(
+            transactions = transactions.map { tx ->
+                CashflowTxSnapshot(
+                    id = tx.id,
+                    type = tx.type,
+                    totalAmountToman = tx.totalAmountToman,
+                    userShareToman = tx.userShareToman,
+                    bankName = tx.shortBankName,
+                    timestamp = tx.timestamp
+                )
+            },
+            paydayStartDay = settings.paydayStartDay,
+            reservedCommitmentsToman = reservedCommitmentsToman
+        )
     }
-    val totalExpensesToman = remember(transactions) {
-        transactions.filter { it.type == "EXPENSE" }.sumOf { it.userShareToman }
+
+    val badgeVisuals = when (summary.healthStatus) {
+        CashflowHealthStatus.POSITIVE -> CashflowBadgeVisuals(
+            label = "تراز مثبت و متعادل ✓",
+            bg = NishapurTurquoiseDeep,
+            border = NishapurTurquoiseBright,
+            textColor = NishapurTurquoiseSoft
+        )
+        CashflowHealthStatus.BALANCED -> CashflowBadgeVisuals(
+            label = "تراز سربه‌سر",
+            bg = SaffronGold.copy(alpha = 0.22f),
+            border = SaffronGoldBright,
+            textColor = SaffronGoldLight
+        )
+        CashflowHealthStatus.DEFICIT -> CashflowBadgeVisuals(
+            label = "کسری تراز ماه جاری",
+            bg = RubyRose.copy(alpha = 0.25f),
+            border = RubyRoseSoft,
+            textColor = RubyRoseSoft
+        )
     }
 
     ModalBottomSheet(
@@ -1181,11 +1281,19 @@ fun HeroMathBreakdownBottomSheet(
                 .testTag("hero_math_sheet"),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(
-                text = "ترازنامه ماه حقوقی و وضعیت مالی",
-                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                color = AlabasterSilk
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    text = "ترازنامه ماه حقوقی و وضعیت مالی",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    color = AlabasterSilk
+                )
+                Text(
+                    text = "بازه محاسبه: ${summary.cycleLabel}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = OrosiOnSurfaceVariant,
+                    modifier = Modifier.testTag("hero_math_cycle_label")
+                )
+            }
 
             Column(
                 modifier = Modifier
@@ -1209,32 +1317,65 @@ fun HeroMathBreakdownBottomSheet(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(50))
-                            .background(NishapurTurquoiseDeep)
-                            .border(1.dp, NishapurTurquoiseBright, RoundedCornerShape(50))
+                            .background(badgeVisuals.bg)
+                            .border(1.dp, badgeVisuals.border, RoundedCornerShape(50))
                             .padding(horizontal = 10.dp, vertical = 4.dp)
+                            .testTag("hero_math_status_badge")
                     ) {
                         Text(
-                            text = "تراز مثبت و متعادل ✓",
+                            text = badgeVisuals.label,
                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                            color = NishapurTurquoiseSoft
+                            color = badgeVisuals.textColor
                         )
                     }
                 }
 
                 MonthlyReportRow(
                     label = "کل ورودی ماه حقوقی",
-                    amountText = "+${PersianNumberUtils.formatToman(totalIncomeToman, showUnit = true)}",
+                    amountText = PersianNumberUtils.formatIncomeToman(summary.totalIncomeToman, showUnit = true),
                     valueColor = NishapurTurquoiseSoft
                 )
                 MonthlyReportRow(
                     label = "کل خرج مصرفی",
-                    amountText = PersianNumberUtils.formatToman(totalExpensesToman, showUnit = true),
+                    amountText = PersianNumberUtils.formatToman(summary.totalExpenseToman, showUnit = true),
                     valueColor = RubyRoseSoft
                 )
                 MonthlyReportRow(
                     label = "کنار گذاشته شده برای قسط و چک",
-                    amountText = PersianNumberUtils.formatToman(reservedCommitmentsToman, showUnit = true),
+                    amountText = PersianNumberUtils.formatToman(summary.reservedCommitmentsToman, showUnit = true),
                     valueColor = RoyalAmethystSoft
+                )
+                if (summary.excludedSelfTransferPairs > 0) {
+                    MonthlyReportRow(
+                        label = "انتقال بین‌حسابی خودی (کسرشده)",
+                        amountText = "${PersianNumberUtils.toPersianDigits(summary.excludedSelfTransferPairs.toString())} مورد • ${PersianNumberUtils.formatToman(summary.excludedSelfTransferTotalToman, showUnit = true)}",
+                        valueColor = OrosiOnSurfaceVariant
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(OrosiHairline)
+                )
+
+                val netFormatted = when {
+                    summary.netBalanceToman > 0L ->
+                        PersianNumberUtils.formatIncomeToman(summary.netBalanceToman, showUnit = true)
+                    summary.netBalanceToman < 0L ->
+                        "کسری ${PersianNumberUtils.formatToman(kotlin.math.abs(summary.netBalanceToman), showUnit = true)}"
+                    else -> "۰ تومان"
+                }
+                val netColor = when (summary.healthStatus) {
+                    CashflowHealthStatus.POSITIVE -> NishapurTurquoiseSoft
+                    CashflowHealthStatus.BALANCED -> SaffronGoldLight
+                    CashflowHealthStatus.DEFICIT -> RubyRoseSoft
+                }
+                MonthlyReportRow(
+                    label = "تراز خالص ماه حقوقی",
+                    amountText = netFormatted,
+                    valueColor = netColor
                 )
             }
 

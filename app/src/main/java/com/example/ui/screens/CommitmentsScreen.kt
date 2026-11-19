@@ -234,7 +234,8 @@ fun CommitmentsScreen(
 
             items(
                 items = filteredCommitments,
-                key = { it.id }
+                key = { it.id },
+                contentType = { if (it.category == "SAYYAD_ISSUED") "sayyad_card" else "commitment_card" }
             ) { item ->
                 if (item.category == "SAYYAD_ISSUED") {
                     SpaciousPurpleSayyadCard(
@@ -243,10 +244,12 @@ fun CommitmentsScreen(
                         onClick = { onCommitmentClick(item) }
                     )
                 } else {
+                    val isDebtDong = item.category == "DONG" &&
+                        (item.statusText.contains("بدهی") || item.counterparty.contains("بدهی"))
                     val (accentColor, icon) = when (item.category) {
                         "SAYYAD_RECEIVED" -> Pair(NishapurTurquoiseBright, Icons.Default.CallReceived)
                         "LOAN_INSTALLMENT" -> Pair(SaffronGoldBright, Icons.Default.AccountBalance)
-                        "DONG" -> Pair(NishapurTurquoiseSoft, Icons.Default.Group)
+                        "DONG" -> Pair(if (isDebtDong) RubyRoseSoft else NishapurTurquoiseSoft, Icons.Default.Group)
                         else -> Pair(RoyalAmethystSoft, Icons.Default.VerifiedUser)
                     }
                     SpaciousCommitmentCard(

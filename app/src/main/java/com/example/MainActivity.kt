@@ -271,9 +271,11 @@ fun OrosiFinanceApp(
         }
     }
 
-    val reservedCommitmentsToman = uiState.commitments
-        .filter { !it.isSettled && (it.category == "SAYYAD_ISSUED" || it.category == "LOAN_INSTALLMENT") }
-        .sumOf { it.amountToman }
+    val reservedCommitmentsToman = remember(uiState.commitments) {
+        uiState.commitments
+            .filter { !it.isSettled && (it.category == "SAYYAD_ISSUED" || it.category == "LOAN_INSTALLMENT") }
+            .sumOf { it.amountToman }
+    }
 
     Scaffold(
         modifier = Modifier

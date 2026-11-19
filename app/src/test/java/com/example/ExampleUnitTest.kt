@@ -1,8 +1,11 @@
 package com.example
 
 import com.example.domain.BankSmsParserEngine
+import com.example.domain.CashflowHealthStatus
+import com.example.domain.CashflowTxSnapshot
 import com.example.domain.JalaliCalendarUtils
 import com.example.domain.JibemanSmsEngine
+import com.example.domain.OrosiCashflowAnalyzer
 import com.example.domain.PersianNumberUtils
 import com.example.domain.PersianVoiceSlangParserEngine
 import org.junit.Assert.assertEquals
@@ -731,6 +734,156 @@ class ExampleUnitTest {
         assertEquals("resolveBank 20,000 lookups took ${elapsedMs}ms", true, elapsedMs < 1_000L)
         assertEquals("بلو", JibemanSmsEngine.resolveBank("+982187641")?.nameFa)
         assertEquals("بلو", JibemanSmsEngine.resolveBank("300087641")?.nameFa)
+    }
+
+    @Test
+    fun testPaydayCycleCashflowAnalyzerAndSelfTransferExclusion() {
+        // Anchor date: 28 Aban 1405 (2026-11-19 12:00:00 local)
+        val (gy, gm, gd) = JalaliCalendarUtils.jalaliToGregorian(1405, 8, 28)
+        val cal = java.util.Calendar.getInstance().apply {
+            set(gy, gm - 1, gd, 12, 0, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val nowMs = cal.timeInMillis
+        val oneMinMs = 60_000L
+        val oneDayMs = 86_400_000L
+
+        // 1. Default paydayStartDay = 1 -> cycle starts 1 Aban 1405; Mehr tx (35 days ago) MUST be excluded!
+        val txs = listOf(
+            // Old Mehr income (outside current payday cycle)
+            CashflowTxSnapshot(1L, "INCOME", 50_000_000L, 50_000_000L, bankName = "بلو", timestamp = nowMs - 35 * oneDayMs),
+            // Real Aban income
+            CashflowTxSnapshot(2L, "INCOME", 12_000_000L, 12_000_000L, bankName = "پاسارگاد", timestamp = nowMs - 5 * oneDayMs),
+            // Real Aban expense
+            CashflowTxSnapshot(3L, "EXPENSE", 15_000_000L, 15_000_000L, bankName = "بلو", timestamp = nowMs - 2 * oneDayMs),
+            // Self-transfer pair: 4,000,000 from Pasargad -> Blu within 2 minutes (MUST be excluded!)
+            CashflowTxSnapshot(4L, "EXPENSE", 4_000_000L, 4_000_000L, bankName = "پاسارگاد", timestamp = nowMs - oneDayMs),
+            CashflowTxSnapshot(5L, "INCOME", 4_000_000L, 4_000_000L, bankName = "بلو", timestamp = nowMs - oneDayMs + 2 * oneMinMs),
+            // Same-amount pair > 15 minutes apart (MUST NOT be excluded!)
+            CashflowTxSnapshot(6L, "EXPENSE", 500_000L, 500_000L, bankName = "بلو", timestamp = nowMs - 3 * oneDayMs),
+            CashflowTxSnapshot(7L, "INCOME", 500_000L, 500_000L, bankName = "سپه", timestamp = nowMs - 3 * oneDayMs + 20 * oneMinMs),
+            // Same-bank same-amount pair within 1 min (MUST NOT be excluded as cross-bank self-transfer!)
+            CashflowTxSnapshot(8L, "EXPENSE", 200_000L, 200_000L, bankName = "بلو", timestamp = nowMs - 4 * oneDayMs),
+            CashflowTxSnapshot(9L, "INCOME", 200_000L, 200_000L, bankName = "بلو", timestamp = nowMs - 4 * oneDayMs + oneMinMs)
+        )
+
+        val summary = OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle(
+            transactions = txs,
+            paydayStartDay = 1,
+            reservedCommitmentsToman = 0L,
+            nowMillis = nowMs
+        )
+        assertEquals(12_700_000L, summary.totalIncomeToman) // 12M + 500K + 200K (excludes 50M Mehr & 4M self-transfer)
+        assertEquals(15_700_000L, summary.totalExpenseToman) // 15M + 500K + 200K (excludes 4M self-transfer)
+        assertEquals(4_000_000L, summary.excludedSelfTransferTotalToman)
+        assertEquals(1, summary.excludedSelfTransferPairs)
+        assertEquals(-3_000_000L, summary.netBalanceToman)
+        assertEquals(CashflowHealthStatus.DEFICIT, summary.healthStatus)
+
+        // 2. Positive & Balanced statuses + custom paydayStartDay = 25 (25 Aban .. 24 Azar)
+        val positiveSummary = OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle(
+            transactions = listOf(
+                CashflowTxSnapshot(10L, "EXPENSE", 10_000_000L, 10_000_000L, bankName = "بلو", timestamp = nowMs - 5 * oneDayMs),
+                CashflowTxSnapshot(11L, "INCOME", 20_000_000L, 20_000_000L, bankName = "بلو", timestamp = nowMs - oneDayMs),
+                CashflowTxSnapshot(12L, "EXPENSE", 5_000_000L, 5_000_000L, bankName = "بلو", timestamp = nowMs)
+            ),
+            paydayStartDay = 25,
+            reservedCommitmentsToman = 0L,
+            nowMillis = nowMs
+        )
+        assertEquals(20_000_000L, positiveSummary.totalIncomeToman)
+        assertEquals(5_000_000L, positiveSummary.totalExpenseToman)
+        assertEquals(CashflowHealthStatus.POSITIVE, positiveSummary.healthStatus)
+
+        val balancedSummary = OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle(
+            transactions = listOf(
+                CashflowTxSnapshot(13L, "INCOME", 1_000_000L, 1_000_000L, bankName = "بلو", timestamp = nowMs),
+                CashflowTxSnapshot(14L, "EXPENSE", 1_000_000L, 1_000_000L, bankName = "بلو", timestamp = nowMs - 30 * oneMinMs)
+            ),
+            paydayStartDay = 1,
+            reservedCommitmentsToman = 0L,
+            nowMillis = nowMs
+        )
+        assertEquals(CashflowHealthStatus.BALANCED, balancedSummary.healthStatus)
+    }
+
+    @Test
+    fun testVideoABatchVoiceLeftoverKeptAndFutureDebtReceivableCommitments() {
+        // 1. Video abatch_20: Leftover-kept commentary ("و بقیه‌اش رو هم نگه داشتم") MUST be dropped!
+        val keptPhrase = "سلام من ۳۰ تومن حقوق گرفتم ۲۵ تومنش رو دادم بستنی ۲۵ تومنش رو دادم به خرج ماشین و بقیه‌اش رو هم نگه داشتم"
+        val keptItems = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(keptPhrase)
+        assertEquals(3, keptItems.size)
+        assertEquals("حقوق", keptItems[0].purposeCategory)
+        assertEquals(30_000_000L, keptItems[0].totalAmountToman)
+        assertEquals(true, keptItems[0].isIncome)
+        assertNull(keptItems[0].commitmentKind)
+
+        assertEquals("بستنی", keptItems[1].purposeCategory)
+        assertEquals(25_000L, keptItems[1].totalAmountToman)
+        assertEquals(false, keptItems[1].isIncome)
+        assertNull(keptItems[1].commitmentKind)
+
+        assertEquals("ماشین", keptItems[2].purposeCategory)
+        assertEquals(25_000_000L, keptItems[2].totalAmountToman)
+        assertEquals(false, keptItems[2].isIncome)
+        assertNull(keptItems[2].commitmentKind)
+
+        // Generalized leftover-kept commentary variants
+        assertEquals(true, PersianVoiceSlangParserEngine.isRemainingBalanceCommentaryClause("بقیشو گذاشتم کنار"))
+        assertEquals(true, PersianVoiceSlangParserEngine.isRemainingBalanceCommentaryClause("بقیه‌اش رو هم نگه داشتم"))
+
+        // 2. Video abatch_21: Contrast split ("ولی") + future debt/receivable routed to Commitments ("تعهدات")
+        val debtReceivablePhrase = "سلام من ۳۹ تومن بدهی دارم ولی فردا ۵۰ تومن طلب دارم"
+        val commitmentItems = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(debtReceivablePhrase)
+        assertEquals(2, commitmentItems.size)
+
+        assertEquals("بدهی", commitmentItems[0].purposeCategory)
+        assertEquals(39_000L, commitmentItems[0].totalAmountToman)
+        assertEquals(false, commitmentItems[0].isIncome)
+        assertEquals("DEBT", commitmentItems[0].commitmentKind)
+        assertEquals("", commitmentItems[0].dueDateHint)
+
+        assertEquals("طلب", commitmentItems[1].purposeCategory)
+        assertEquals(50_000L, commitmentItems[1].totalAmountToman)
+        assertEquals(true, commitmentItems[1].isIncome)
+        assertEquals("RECEIVABLE", commitmentItems[1].commitmentKind)
+        assertEquals("فردا", commitmentItems[1].dueDateHint)
+
+        // 3. Generalized named future debt & receivable with "اما" and "پس‌فردا"
+        val namedCommitments = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(
+            "به علی ۲۰۰ تومن بدهکارم اما پس‌فردا ۳۰۰ تومن از رضا طلب دارم"
+        )
+        assertEquals(2, namedCommitments.size)
+        assertEquals("DEBT", namedCommitments[0].commitmentKind)
+        assertEquals(200_000L, namedCommitments[0].totalAmountToman)
+        assertEquals(true, namedCommitments[0].purposeCategory.contains("علی"))
+
+        assertEquals("RECEIVABLE", namedCommitments[1].commitmentKind)
+        assertEquals(300_000L, namedCommitments[1].totalAmountToman)
+        assertEquals("پس‌فردا", namedCommitments[1].dueDateHint)
+        assertEquals(true, namedCommitments[1].purposeCategory.contains("رضا"))
+
+        // 4. Settled debt/receivable MUST stay regular transactions (commitmentKind == null)
+        val paidDebt = PersianVoiceSlangParserEngine.parseVoiceCommand("۵۰ تومن بدهی که داشتم رو دادم")
+        assertNull(paidDebt.commitmentKind)
+        assertEquals(false, paidDebt.isIncome)
+        assertEquals(50_000L, paidDebt.totalAmountToman)
+
+        val collectedReceivable = PersianVoiceSlangParserEngine.parseVoiceCommand("۱۰۰ تومن طلبم رو گرفتم")
+        assertNull(collectedReceivable.commitmentKind)
+        assertEquals(true, collectedReceivable.isIncome)
+        assertEquals(100_000L, collectedReceivable.totalAmountToman)
+
+        // 5. Relative Jalali date resolution ("فردا" advances 28 Aban -> 29 Aban)
+        val (gy, gm, gd) = JalaliCalendarUtils.jalaliToGregorian(1405, 8, 28)
+        val baseCal = java.util.Calendar.getInstance().apply {
+            set(gy, gm - 1, gd, 12, 0, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        assertEquals(
+            "۲۹ آبان ۱۴۰۵",
+            JalaliCalendarUtils.resolveRelativeJalaliDate("فردا", baseCal.timeInMillis)
+        )
     }
 
     @Test

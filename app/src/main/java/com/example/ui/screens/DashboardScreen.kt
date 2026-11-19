@@ -61,6 +61,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -96,6 +97,31 @@ import com.example.ui.theme.RubyRoseSoft
 import com.example.ui.theme.SaffronGoldBright
 import com.example.ui.theme.SaffronGoldLight
 
+// Hoisted static shapes, colors, and brushes to guarantee zero per-frame allocations during 120Hz scrolling
+private val DashCardShape28 = RoundedCornerShape(28.dp)
+private val DashCardShape20 = RoundedCornerShape(20.dp)
+private val DashCardShape18 = RoundedCornerShape(18.dp)
+private val DashPillShape12 = RoundedCornerShape(12.dp)
+private val DashPillShape50 = RoundedCornerShape(50)
+private val DashUntaggedBorderColor = NishapurTurquoise.copy(alpha = 0.45f)
+private val DashTankhahBorderColor = NishapurTurquoiseBright.copy(alpha = 0.65f)
+private val DashDeleteOverlayBg = OrosiSurfaceHigh.copy(alpha = 0.96f)
+private val DashHeroCircleGlowColor = NishapurTurquoiseBright.copy(alpha = 0.08f)
+private val DashHeaderVoiceBrush = Brush.horizontalGradient(
+    colors = listOf(NishapurTurquoise, NishapurTurquoiseDeep)
+)
+private val DashHeroBgBrush = Brush.linearGradient(
+    colors = listOf(PersianLapisGlow, PersianLapis, PersianLapisDeep),
+    start = Offset(0f, 0f),
+    end = Offset(900f, 700f)
+)
+private val DashHeroBorderBrush = Brush.verticalGradient(
+    colors = listOf(
+        Color.White.copy(alpha = 0.26f),
+        PersianLapisLight.copy(alpha = 0.12f)
+    )
+)
+
 @Composable
 fun DashboardScreen(
     settings: AppSettingsEntity,
@@ -115,33 +141,37 @@ fun DashboardScreen(
     onOpenTransactionsTab: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val totalAllAccountsBalance = bankAccounts
-        .sumOf { it.balanceToman.coerceAtLeast(0L) }
-
-    val rawTankhahSum = bankAccounts
-        .filter { it.isTankhah }
-        .sumOf { it.balanceToman.coerceAtLeast(0L) }
-
-    val nonTankhahBalance = bankAccounts
-        .filter { !it.isTankhah }
-        .sumOf { it.balanceToman.coerceAtLeast(0L) }
-
-    val unpaidCommitmentsToman = commitments
-        .filter { !it.isSettled && (it.category == "SAYYAD_ISSUED" || it.category == "LOAN_INSTALLMENT") }
-        .sumOf { it.amountToman }
-
-    val tankhahBalance = if (unpaidCommitmentsToman in 1L until rawTankhahSum) {
-        (rawTankhahSum - unpaidCommitmentsToman).coerceAtLeast(0L)
-    } else {
-        rawTankhahSum
+    val totalAllAccountsBalance = remember(bankAccounts) {
+        bankAccounts.sumOf { it.balanceToman.coerceAtLeast(0L) }
+    }
+    val rawTankhahSum = remember(bankAccounts) {
+        bankAccounts.filter { it.isTankhah }.sumOf { it.balanceToman.coerceAtLeast(0L) }
+    }
+    val nonTankhahBalance = remember(bankAccounts) {
+        bankAccounts.filter { !it.isTankhah }.sumOf { it.balanceToman.coerceAtLeast(0L) }
+    }
+    val unpaidCommitmentsToman = remember(commitments) {
+        commitments
+            .filter { !it.isSettled && (it.category == "SAYYAD_ISSUED" || it.category == "LOAN_INSTALLMENT") }
+            .sumOf { it.amountToman }
+    }
+    val tankhahBalance = remember(rawTankhahSum, unpaidCommitmentsToman) {
+        if (unpaidCommitmentsToman in 1L until rawTankhahSum) {
+            (rawTankhahSum - unpaidCommitmentsToman).coerceAtLeast(0L)
+        } else {
+            rawTankhahSum
+        }
     }
 
-    val visibleTransactions = androidx.compose.runtime.remember(transactions) {
+    val visibleTransactions = remember(transactions) {
         transactions.filter { it.totalAmountToman > 0L }
     }
-    val recentTransactions = androidx.compose.runtime.remember(visibleTransactions) {
+    val recentTransactions = remember(visibleTransactions) {
         visibleTransactions.take(20)
     }
+
+    // Single hoisted delete-confirm ID for the whole LazyColumn (zero per-row Box / state overhead on scroll)
+    var activeDeleteConfirmId by remember { mutableStateOf<Long?>(null) }
 
     val isInitialSkeletonLoading = isSyncingSms && bankAccounts.isEmpty() && visibleTransactions.isEmpty()
     val shimmerBrush = if (isInitialSkeletonLoading) orosiShimmerBrush() else null
@@ -200,7 +230,7 @@ fun DashboardScreen(
         }
 
         // 2. Horizontal "حساب‌ها" (Bank Accounts) Carousel
-        item {
+        item(key = "accounts_carousel_section", contentType = "accounts_carousel") {
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -212,15 +242,16 @@ fun DashboardScreen(
                 ) {
                     Text(
                         text = "حساب‌ها",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
                         color = AlabasterSilk
                     )
                     Text(
                         text = "مدیریت همه حساب‌ها >",
-                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
                         color = NishapurTurquoiseSoft,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(50))
                             .clickable(onClick = onOpenAccountsTab)
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                             .testTag("open_accounts_tab_link")
@@ -234,7 +265,7 @@ fun DashboardScreen(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     if (isInitialSkeletonLoading && shimmerBrush != null) {
-                        items(2) { idx ->
+                        items(2, key = { "account_shimmer_$it" }, contentType = { "account_shimmer" }) { idx ->
                             AccountCardSkeletonShimmer(
                                 shimmerBrush = shimmerBrush,
                                 modifier = Modifier.testTag("account_shimmer_card_$idx")
@@ -243,7 +274,8 @@ fun DashboardScreen(
                     } else {
                         items(
                             items = bankAccounts,
-                            key = { it.bankName }
+                            key = { it.bankName },
+                            contentType = { "bank_carousel_card" }
                         ) { account ->
                             BankAccountCarouselCard(
                                 account = account,
@@ -259,7 +291,7 @@ fun DashboardScreen(
         }
 
         // 3. Section Header "تراکنش‌های اخیر" + Sleek Turquoise Pill Button "+ ثبت صوتی"
-        item {
+        item(key = "recent_transactions_header", contentType = "section_header") {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -276,16 +308,8 @@ fun DashboardScreen(
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(
-                            Brush.horizontalGradient(
-                                colors = listOf(
-                                    NishapurTurquoise,
-                                    NishapurTurquoiseDeep
-                                )
-                            )
-                        )
-                        .border(1.dp, NishapurTurquoiseBright, RoundedCornerShape(50))
+                        .background(DashHeaderVoiceBrush, DashPillShape50)
+                        .border(1.dp, NishapurTurquoiseBright, DashPillShape50)
                         .clickable(onClick = onAddVoiceClick)
                         .padding(horizontal = 14.dp, vertical = 8.dp)
                         .testTag("header_voice_add_button")
@@ -299,7 +323,8 @@ fun DashboardScreen(
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "+ ثبت صوتی",
-                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
                         color = AlabasterSilk,
                         maxLines = 1,
                         softWrap = false
@@ -310,7 +335,7 @@ fun DashboardScreen(
 
         // 4. Recent Transaction Cards (or Calm Shimmer Skeletons during initial inbox scan)
         if (isInitialSkeletonLoading && shimmerBrush != null) {
-            items(4, key = { "home_tx_shimmer_$it" }) { idx ->
+            items(4, key = { "home_tx_shimmer_$it" }, contentType = { "tx_shimmer" }) { idx ->
                 TransactionRowSkeletonShimmer(
                     shimmerBrush = shimmerBrush,
                     modifier = Modifier.testTag("tx_shimmer_card_$idx")
@@ -322,15 +347,30 @@ fun DashboardScreen(
                 key = { tx -> tx.id },
                 contentType = { "transaction_card" }
             ) { tx ->
-                TwoStepSwipeToDeleteWrapper(
-                    transactionId = tx.id,
-                    onConfirmDelete = { onDeleteTransaction(tx) }
-                ) { onTriggerDeleteReveal ->
+                val isConfirmingDelete = activeDeleteConfirmId == tx.id
+                if (isConfirmingDelete) {
+                    InlineDeleteConfirmOverlayBox(
+                        transactionId = tx.id,
+                        onConfirmDelete = {
+                            activeDeleteConfirmId = null
+                            onDeleteTransaction(tx)
+                        },
+                        onCancel = { activeDeleteConfirmId = null }
+                    ) {
+                        CalmTransactionCard(
+                            transaction = tx,
+                            hideAmounts = settings.hideAmounts,
+                            onRowClick = { onTransactionClick(tx) },
+                            onRowLongClick = { activeDeleteConfirmId = null },
+                            onUntaggedMicClick = { onUntaggedMicClick(tx) }
+                        )
+                    }
+                } else {
                     CalmTransactionCard(
                         transaction = tx,
                         hideAmounts = settings.hideAmounts,
                         onRowClick = { onTransactionClick(tx) },
-                        onRowLongClick = onTriggerDeleteReveal,
+                        onRowLongClick = { activeDeleteConfirmId = tx.id },
                         onUntaggedMicClick = { onUntaggedMicClick(tx) }
                     )
                 }
@@ -362,6 +402,97 @@ fun DashboardScreen(
 }
 
 @Composable
+fun InlineDeleteConfirmOverlayBox(
+    transactionId: Long,
+    onConfirmDelete: () -> Unit,
+    onCancel: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    Box(modifier = Modifier.fillMaxWidth()) {
+        content()
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .background(DashDeleteOverlayBg, DashCardShape20)
+                .border(1.5.dp, RubyRoseSoft, DashCardShape20)
+                .padding(horizontal = 14.dp)
+                .testTag("swipe_delete_confirm_bar_$transactionId"),
+            contentAlignment = Alignment.Center
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "حذف این تراکنش؟",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = RubyRoseSoft
+                )
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .background(RubyRose, DashPillShape12)
+                            .border(1.dp, RubyRoseSoft, DashPillShape12)
+                            .clickable(onClick = onConfirmDelete)
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                            .testTag("confirm_swipe_delete_$transactionId")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteOutline,
+                            contentDescription = "حذف قطعی",
+                            tint = AlabasterSilk,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "حذف قطعی",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = AlabasterSilk,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .background(OrosiSurfaceContainer, DashPillShape12)
+                            .border(1.dp, OrosiHairline, DashPillShape12)
+                            .clickable(onClick = onCancel)
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                            .testTag("cancel_swipe_delete_$transactionId")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "انصراف",
+                            tint = OrosiOnSurfaceVariant,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "انصراف",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = AlabasterSilk,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun TwoStepSwipeToDeleteWrapper(
     transactionId: Long,
     onConfirmDelete: () -> Unit,
@@ -369,99 +500,19 @@ fun TwoStepSwipeToDeleteWrapper(
 ) {
     var isConfirmOpen by remember(transactionId) { mutableStateOf(false) }
 
-    Box(modifier = Modifier.fillMaxWidth()) {
-        // Foreground card with zero horizontal drag pointerInput overhead for 120Hz scrolling
-        content {
-            isConfirmOpen = !isConfirmOpen
+    if (isConfirmOpen) {
+        InlineDeleteConfirmOverlayBox(
+            transactionId = transactionId,
+            onConfirmDelete = {
+                isConfirmOpen = false
+                onConfirmDelete()
+            },
+            onCancel = { isConfirmOpen = false }
+        ) {
+            content { isConfirmOpen = false }
         }
-
-        // In-place 2-step confirmation overlay triggered by Long-Press (never expands row height)
-        if (isConfirmOpen) {
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(OrosiSurfaceHigh.copy(alpha = 0.96f))
-                    .border(1.5.dp, RubyRoseSoft, RoundedCornerShape(20.dp))
-                    .padding(horizontal = 14.dp)
-                    .testTag("swipe_delete_confirm_bar_$transactionId"),
-                contentAlignment = Alignment.Center
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "حذف این تراکنش؟",
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
-                        color = RubyRoseSoft
-                    )
-
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(RubyRose)
-                                .border(1.dp, RubyRoseSoft, RoundedCornerShape(12.dp))
-                                .clickable {
-                                    isConfirmOpen = false
-                                    onConfirmDelete()
-                                }
-                                .padding(horizontal = 12.dp, vertical = 8.dp)
-                                .testTag("confirm_swipe_delete_$transactionId")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.DeleteOutline,
-                                contentDescription = "حذف قطعی",
-                                tint = AlabasterSilk,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "حذف قطعی",
-                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold),
-                                color = AlabasterSilk,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        }
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(OrosiSurfaceContainer)
-                                .border(1.dp, OrosiHairline, RoundedCornerShape(12.dp))
-                                .clickable {
-                                    isConfirmOpen = false
-                                }
-                                .padding(horizontal = 10.dp, vertical = 8.dp)
-                                .testTag("cancel_swipe_delete_$transactionId")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "انصراف",
-                                tint = OrosiOnSurfaceVariant,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "انصراف",
-                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                                color = AlabasterSilk,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        }
-                    }
-                }
-            }
-        }
+    } else {
+        content { isConfirmOpen = true }
     }
 }
 
@@ -512,25 +563,6 @@ private fun JibemanFinancialStatusHeroCard(
         0.5f
     }
 
-    val heroBgBrush = remember {
-        Brush.linearGradient(
-            colors = listOf(
-                PersianLapisGlow,
-                PersianLapis,
-                PersianLapisDeep
-            ),
-            start = Offset(0f, 0f),
-            end = Offset(900f, 700f)
-        )
-    }
-    val heroBorderBrush = remember {
-        Brush.verticalGradient(
-            colors = listOf(
-                Color.White.copy(alpha = 0.26f),
-                PersianLapisLight.copy(alpha = 0.12f)
-            )
-        )
-    }
     val formattedFreeBalance = remember(freeBalance, hideAmounts) {
         PersianNumberUtils.formatToman(
             freeBalance,
@@ -553,33 +585,26 @@ private fun JibemanFinancialStatusHeroCard(
         )
     }
 
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .graphicsLayer()
-            .clip(RoundedCornerShape(28.dp))
-            .background(heroBgBrush)
+            .background(DashHeroBgBrush, DashCardShape28)
+            .drawBehind {
+                drawCircle(
+                    color = DashHeroCircleGlowColor,
+                    radius = size.height * 0.6f,
+                    center = Offset(size.width * 0.15f, size.height * 0.2f)
+                )
+            }
             .border(
                 width = 1.dp,
-                brush = heroBorderBrush,
-                shape = RoundedCornerShape(28.dp)
+                brush = DashHeroBorderBrush,
+                shape = DashCardShape28
             )
             .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 20.dp)
             .testTag("dashboard_hero_card")
     ) {
-        Canvas(modifier = Modifier.matchParentSize()) {
-            drawCircle(
-                color = NishapurTurquoiseBright.copy(alpha = 0.08f),
-                radius = size.height * 0.6f,
-                center = Offset(size.width * 0.15f, size.height * 0.2f)
-            )
-        }
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 20.dp)
-        ) {
             // Top Row: "وضعیت مالی" on the right, Eye icon (👁) on the left
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -852,7 +877,6 @@ private fun JibemanFinancialStatusHeroCard(
                             softWrap = false
                         )
                     }
-                }
             }
         }
     }
@@ -989,15 +1013,21 @@ private fun BankAccountCarouselCard(
     onCardClick: () -> Unit,
     onToggleTankhah: () -> Unit
 ) {
+    val formattedAccountBalance = remember(account.balanceToman, hideAmounts) {
+        PersianNumberUtils.formatToman(
+            account.balanceToman,
+            showUnit = true,
+            hideAmount = hideAmounts
+        )
+    }
     Column(
         modifier = Modifier
             .width(184.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .background(OrosiSurfaceHigh)
+            .background(OrosiSurfaceHigh, DashCardShape20)
             .border(
                 width = if (showTankhahBadge && account.isTankhah) 1.5.dp else 1.dp,
-                color = if (showTankhahBadge && account.isTankhah) NishapurTurquoiseBright.copy(alpha = 0.65f) else OrosiHairline,
-                shape = RoundedCornerShape(20.dp)
+                color = if (showTankhahBadge && account.isTankhah) DashTankhahBorderColor else OrosiHairline,
+                shape = DashCardShape20
             )
             .clickable(onClick = onCardClick)
             .padding(14.dp)
@@ -1076,15 +1106,10 @@ private fun BankAccountCarouselCard(
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
-                text = PersianNumberUtils.formatToman(
-                    account.balanceToman,
-                    showUnit = true,
-                    hideAmount = hideAmounts
-                ),
-                style = MaterialTheme.typography.titleSmall.copy(
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 14.sp
-                ),
+                text = formattedAccountBalance,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 14.sp,
                 color = AlabasterSilk,
                 maxLines = 1,
                 softWrap = false
@@ -1156,12 +1181,11 @@ fun CalmTransactionCard(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(OrosiSurfaceContainer)
+            .background(OrosiSurfaceContainer, DashCardShape20)
             .border(
                 width = 1.dp,
-                color = if (transaction.isUntagged) NishapurTurquoise.copy(alpha = 0.45f) else OrosiHairline,
-                shape = RoundedCornerShape(20.dp)
+                color = if (transaction.isUntagged) DashUntaggedBorderColor else OrosiHairline,
+                shape = DashCardShape20
             )
             .combinedClickable(
                 onClick = onRowClick,
@@ -1206,6 +1230,7 @@ fun CalmTransactionCard(
             if (transaction.isUntagged) {
                 Spacer(modifier = Modifier.height(6.dp))
                 PulsingTurquoiseMicButton(
+                    isIncome = transaction.type == "INCOME",
                     onClick = onUntaggedMicClick,
                     testTag = "untagged_mic_button_${transaction.id}"
                 )
@@ -1228,41 +1253,34 @@ fun CalmTransactionCard(
 
 @Composable
 private fun PulsingTurquoiseMicButton(
+    isIncome: Boolean = false,
     onClick: () -> Unit,
     testTag: String
 ) {
+    val labelText = if (isIncome) "بگو از کجا اومد؟" else "بگو بابت چی؟"
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .wrapContentWidth(unbounded = false)
-            .clip(RoundedCornerShape(12.dp))
-            .background(
-                Brush.horizontalGradient(
-                    colors = listOf(
-                        NishapurTurquoise,
-                        NishapurTurquoiseDeep
-                    )
-                )
-            )
-            .border(1.dp, NishapurTurquoiseBright, RoundedCornerShape(12.dp))
+            .background(NishapurTurquoise, DashPillShape12)
+            .border(1.dp, NishapurTurquoiseBright, DashPillShape12)
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 8.dp)
+            .padding(horizontal = 9.dp, vertical = 7.dp)
             .testTag(testTag)
     ) {
         Icon(
             imageVector = Icons.Default.Mic,
-            contentDescription = "بگو بابت چی؟",
+            contentDescription = labelText,
             tint = AlabasterSilk,
             modifier = Modifier.size(15.dp)
         )
         Spacer(modifier = Modifier.width(4.dp))
         Text(
-            text = "بگو بابت چی؟",
-            style = MaterialTheme.typography.labelMedium.copy(
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.sp,
-                lineHeight = 16.sp
-            ),
+            text = labelText,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
             color = AlabasterSilk,
             maxLines = 1,
             softWrap = false

@@ -19,6 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -248,41 +249,33 @@ fun BankLogoAvatar(
 
     if (pngBitmap != null) {
         // PNGs in the Jibeman ZIP already have their own 192x192 circular frame and white background
-        Box(
-            contentAlignment = Alignment.Center,
+        Image(
+            bitmap = pngBitmap,
+            contentDescription = "لوگوی بانک $bankName",
+            contentScale = ContentScale.Fit,
+            filterQuality = FilterQuality.Medium,
             modifier = modifier.size(size)
-        ) {
+        )
+    } else {
+        val fallbackVectorRes = remember(bankName) { resolveBankLogoDrawableRes(bankName) }
+        if (fallbackVectorRes != null) {
             Image(
-                bitmap = pngBitmap,
+                painter = painterResource(id = fallbackVectorRes),
                 contentDescription = "لوگوی بانک $bankName",
                 contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize()
+                modifier = modifier
+                    .size(size)
+                    .clip(CircleShape)
             )
-        }
-    } else {
-        val fallbackVectorRes = resolveBankLogoDrawableRes(bankName)
-        if (fallbackVectorRes != null) {
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = modifier
-                    .size(size)
-                    .clip(CircleShape)
-            ) {
-                Image(
-                    painter = painterResource(id = fallbackVectorRes),
-                    contentDescription = "لوگوی بانک $bankName",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
         } else {
-            val isManualOrCash = bankName.contains("نقدی") || bankName.contains("دستی") || bankName.contains("کیف پول")
+            val isManualOrCash = remember(bankName) {
+                bankName.contains("نقدی") || bankName.contains("دستی") || bankName.contains("کیف پول")
+            }
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = modifier
                     .size(size)
-                    .clip(CircleShape)
-                    .background(PersianLapis)
+                    .background(PersianLapis, CircleShape)
                     .border(1.dp, OrosiHairline, CircleShape)
             ) {
                 Icon(

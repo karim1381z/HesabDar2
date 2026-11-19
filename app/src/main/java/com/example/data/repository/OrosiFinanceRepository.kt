@@ -1524,9 +1524,34 @@ class OrosiFinanceRepository(
 
     suspend fun cleanRescanRealSms(context: Context): Int = cleanPurgeAndRescanRealSms(context)
 
+    private suspend fun insertVoiceCommitment(item: ParsedVoiceExpense, timestampMillis: Long) {
+        val cleanPurpose = item.purposeCategory.trim().ifBlank {
+            if (item.commitmentKind == "RECEIVABLE") "طلب" else "بدهی"
+        }
+        val isReceivable = item.commitmentKind == "RECEIVABLE" || item.isIncome
+        val resolvedJalaliDate = if (item.dueDateHint.isNotBlank()) {
+            "${item.dueDateHint} • ${JalaliCalendarUtils.resolveRelativeJalaliDate(item.dueDateHint, timestampMillis)}"
+        } else {
+            JalaliCalendarUtils.timestampToJalali(timestampMillis).dateWithYear
+        }
+        dao.insertCommitment(
+            CommitmentEntity(
+                category = "DONG",
+                title = cleanPurpose,
+                counterparty = if (isReceivable) "طلب دارم • ثبت صوتی" else "بدهی دارم • ثبت صوتی",
+                amountToman = item.totalAmountToman,
+                dueDateStr = resolvedJalaliDate,
+                sayyadId = "",
+                statusText = if (isReceivable) "طلب دارم (دریافتنی)" else "بدهی دارم (پرداختنی)",
+                isSettled = false,
+                timestamp = timestampMillis
+            )
+        )
+    }
+
     /**
-     * Inserts multiple voice expenses as separate transactions when the user speaks a multi-clause
-     * sentence in "+ ثبت صوتی" mode (e.g. "۵۰۰ هزار نانوایی و ۳۰۰ هزار شارژ ایرانسل خریدم").
+     * Inserts multiple voice expenses and/or future commitments (بدهی / طلب) when the user speaks
+     * a multi-clause sentence in "+ ثبت صوتی" mode.
      */
     suspend fun confirmMultiVoiceExpenses(items: List<ParsedVoiceExpense>) {
         val validItems = items.filter { it.totalAmountToman > 0L && it.purposeCategory.isNotBlank() }
@@ -1537,6 +1562,11 @@ class OrosiFinanceRepository(
         val manualBankLabel = "نقدی / دستی"
 
         validItems.forEachIndexed { index, item ->
+            if (item.isCommitment) {
+                insertVoiceCommitment(item, baseNow + index)
+                return@forEachIndexed
+            }
+
             val cleanPurpose = item.purposeCategory.trim()
             val resolvedStore = item.merchant.trim()
                 .ifBlank { item.storeName.trim() }
@@ -1569,12 +1599,12 @@ class OrosiFinanceRepository(
     }
 
     /**
-     * Saves a voice-tagged expense or updates an untagged SMS transaction.
+     * Saves a voice-tagged expense, future commitment (بدهی/طلب), or updates an untagged SMS transaction.
      * - When tagging an existing bank SMS (`targetUntaggedTransactionId != null`), updates BOTH
-     *   `tx.title` and `tx.purpose` (e.g. `"نانوایی (۵۰۰,۰۰۰) + شارژ ایرانسل (۳۰۰,۰۰۰)"`) and sets
-     *   `isUntagged = false` (`needsVoiceTag = false`)—NEVER changes its bank amount or bank name!
-     * - When creating a new manual voice transaction (`targetUntaggedTransactionId == null`),
-     *   requires `totalAmountToman > 0L` and labels it as `bankName = "نقدی / دستی"`.
+     *   `tx.title` and `tx.purpose` and sets `isUntagged = false`—NEVER changes its bank amount or bank name!
+     * - When creating a new manual voice entry (`targetUntaggedTransactionId == null`),
+     *   future obligations (`isCommitment == true`) route directly to Room `commitments` (`DONG` tab),
+     *   while completed transactions save to Room `transactions`.
      */
     suspend fun confirmVoiceExpense(
         parsedVoice: ParsedVoiceExpense,
@@ -1632,8 +1662,16 @@ class OrosiFinanceRepository(
             }
         }
 
-        // Manual cash/voice transaction: block saving if amount <= 0L!
+        // Manual cash/voice entry: block saving if amount <= 0L!
         if (parsedVoice.totalAmountToman <= 0L) return
+
+        // Route future debt / receivable directly to Commitments ("بدهی و طلب")
+        if (parsedVoice.isCommitment) {
+            insertVoiceCommitment(parsedVoice, now)
+            recalculateRealSafeToSpend()
+            persistSnapshotToSharedPrefs()
+            return
+        }
 
         val effectiveDong = parsedVoice.dongAmountToman.coerceIn(0L, parsedVoice.totalAmountToman)
         val effectiveUserShare = (parsedVoice.totalAmountToman - effectiveDong).coerceAtLeast(0L)

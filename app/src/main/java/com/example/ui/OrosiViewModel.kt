@@ -55,7 +55,9 @@ data class VoiceUiState(
     val isIncome: Boolean = false,
     val hasUserOverriddenIncomeType: Boolean = false,
     val hasSummaryTotalMismatch: Boolean = false,
-    val statedSummaryHeaderToman: Long = 0L
+    val statedSummaryHeaderToman: Long = 0L,
+    val commitmentKind: String? = null,
+    val dueDateHint: String = ""
 )
 
 data class OrosiUiState(
@@ -599,11 +601,18 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onVoiceTransactionTypeChanged(isIncome: Boolean) {
         val current = _voiceState.value
-        val updatedMulti = current.parsedMultiItems.map { it.copy(isIncome = isIncome) }
+        val updatedMulti = current.parsedMultiItems.map { item ->
+            item.copy(
+                isIncome = isIncome,
+                commitmentKind = item.commitmentKind?.let { if (isIncome) "RECEIVABLE" else "DEBT" }
+            )
+        }
+        val updatedSingleKind = current.commitmentKind?.let { if (isIncome) "RECEIVABLE" else "DEBT" }
         _voiceState.value = current.copy(
             isIncome = isIncome,
             hasUserOverriddenIncomeType = true,
-            parsedMultiItems = updatedMulti
+            parsedMultiItems = updatedMulti,
+            commitmentKind = updatedSingleKind
         )
     }
 
@@ -619,7 +628,10 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
         if (index !in currentList.indices) return
         val existingItem = currentList[index]
         if (existingItem.isIncome == isIncome) return
-        currentList[index] = existingItem.copy(isIncome = isIncome)
+        currentList[index] = existingItem.copy(
+            isIncome = isIncome,
+            commitmentKind = existingItem.commitmentKind?.let { if (isIncome) "RECEIVABLE" else "DEBT" }
+        )
         val combinedNote = PersianVoiceSlangParserEngine.formatCombinedMultiVoiceNote(currentList)
         _voiceState.value = _voiceState.value.copy(
             parsedMultiItems = currentList,
@@ -746,10 +758,12 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val hasMixedDirections = multiItems.size > 1 &&
-            multiItems.any { it.isIncome } &&
-            multiItems.any { !it.isIncome }
+            ((multiItems.any { it.isIncome } && multiItems.any { !it.isIncome }) ||
+                multiItems.any { it.isCommitment })
 
-        val keepUserOverride = _voiceState.value.hasUserOverriddenIncomeType && !hasMixedDirections
+        val keepUserOverride = _voiceState.value.hasUserOverriddenIncomeType &&
+            !hasMixedDirections &&
+            parsed.commitmentKind == null
 
         val resolvedIsIncome = when {
             targetTx != null -> targetTx.type == "INCOME"
@@ -759,7 +773,7 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
 
         val effectiveMultiItems = if (multiItems.size > 1) {
             when {
-                targetTx != null -> multiItems.map { it.copy(isIncome = targetTx.type == "INCOME") }
+                targetTx != null -> multiItems.map { it.copy(isIncome = targetTx.type == "INCOME", commitmentKind = null) }
                 hasMixedDirections -> multiItems
                 keepUserOverride -> multiItems.map { it.copy(isIncome = resolvedIsIncome) }
                 else -> multiItems
@@ -785,7 +799,9 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             isIncome = resolvedIsIncome,
             hasUserOverriddenIncomeType = keepUserOverride,
             hasSummaryTotalMismatch = summaryMismatchAmount != null,
-            statedSummaryHeaderToman = summaryMismatchAmount ?: 0L
+            statedSummaryHeaderToman = summaryMismatchAmount ?: 0L,
+            commitmentKind = if (targetTx == null && effectiveMultiItems.isEmpty()) parsed.commitmentKind else null,
+            dueDateHint = if (targetTx == null && effectiveMultiItems.isEmpty()) parsed.dueDateHint else ""
         )
     }
 
@@ -845,11 +861,20 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
 
             if (targetTx == null && activeMultiItems.size > 1) {
                 repository.confirmMultiVoiceExpenses(activeMultiItems)
-                val countFa = PersianNumberUtils.toPersianDigits(activeMultiItems.size.toString())
+                val commCount = activeMultiItems.count { it.isCommitment }
+                val txCount = activeMultiItems.size - commCount
                 val combinedSummary = PersianVoiceSlangParserEngine.formatCombinedMultiVoiceNote(activeMultiItems)
+                val bannerMsg = when {
+                    commCount == activeMultiItems.size ->
+                        "${PersianNumberUtils.toPersianDigits(commCount.toString())} تعهد در بخش بدهی و طلب ثبت شد ✓"
+                    commCount > 0 ->
+                        "${PersianNumberUtils.toPersianDigits(txCount.toString())} تراکنش و ${PersianNumberUtils.toPersianDigits(commCount.toString())} تعهد ثبت شد ✓"
+                    else ->
+                        "${PersianNumberUtils.toPersianDigits(activeMultiItems.size.toString())} تراکنش مجزا ثبت شد: $combinedSummary ✓"
+                }
                 _showVoiceOverlaySheet.value = false
                 _voiceState.value = VoiceUiState()
-                showBanner("$countFa تراکنش مجزا ثبت شد: $combinedSummary ✓")
+                showBanner(bannerMsg)
                 return@launch
             }
 
@@ -874,6 +899,8 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
                     PersianVoiceSlangParserEngine.formatCombinedMultiVoiceNote(activeMultiItems)
                 v.purposeCategory.isNotBlank() -> v.purposeCategory.trim()
                 parsedFromSpeech.purposeCategory.isNotBlank() -> parsedFromSpeech.purposeCategory.trim()
+                v.commitmentKind == "RECEIVABLE" -> "طلب"
+                v.commitmentKind == "DEBT" -> "بدهی"
                 v.isIncome -> "دریافت وجه"
                 else -> ""
             }
@@ -890,6 +917,16 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
 
             val safeDong = parsedFromSpeech.dongAmountToman.coerceIn(0L, finalTotalAmount)
             val finalUserShare = (finalTotalAmount - safeDong).coerceAtLeast(0L)
+            val effectiveCommitmentKind = if (targetTx == null) {
+                v.commitmentKind ?: parsedFromSpeech.commitmentKind
+            } else {
+                null
+            }
+            val effectiveDueDateHint = if (effectiveCommitmentKind != null) {
+                v.dueDateHint.ifBlank { parsedFromSpeech.dueDateHint }
+            } else {
+                ""
+            }
 
             val finalParsed = parsedFromSpeech.copy(
                 purposeCategory = finalPurpose,
@@ -898,11 +935,16 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
                 userShareToman = finalUserShare,
                 storeName = targetTx?.shortBankName ?: parsedFromSpeech.merchant.ifBlank { "نقدی / دستی" },
                 cardLabel = targetTx?.cardInfo ?: "نقدی / دستی",
-                isIncome = v.isIncome
+                isIncome = v.isIncome,
+                commitmentKind = effectiveCommitmentKind,
+                dueDateHint = effectiveDueDateHint
             )
 
             repository.confirmVoiceExpense(finalParsed, targetTx?.id)
-            val msg = if (finalParsed.dongAmountToman > 0L && finalParsed.dongFriendName.isNotBlank()) {
+            val msg = if (finalParsed.isCommitment) {
+                val kindLabel = if (finalParsed.commitmentKind == "RECEIVABLE") "طلب" else "بدهی"
+                "$kindLabel «${finalParsed.purposeCategory}» (${PersianNumberUtils.formatToman(finalTotalAmount, true)}) در بخش تعهدات ثبت شد ✓"
+            } else if (finalParsed.dongAmountToman > 0L && finalParsed.dongFriendName.isNotBlank()) {
                 "ثبت شد! «${finalParsed.purposeCategory}» — فقط سهم شما (${PersianNumberUtils.formatToman(finalParsed.userShareToman, true)}) کسر شد."
             } else if (finalParsed.isIncome) {
                 "واریزی «${finalParsed.purposeCategory}» (${PersianNumberUtils.formatIncomeToman(finalTotalAmount, true)}) ثبت شد ✓"
