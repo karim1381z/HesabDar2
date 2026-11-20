@@ -116,6 +116,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        requestMaxDisplayRefreshRate()
         WindowCompat.getInsetsController(window, window.decorView).apply {
             isAppearanceLightStatusBars = false
             isAppearanceLightNavigationBars = false
@@ -133,6 +134,33 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    @Suppress("DEPRECATION")
+    private fun requestMaxDisplayRefreshRate() {
+        try {
+            val activeDisplay = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                display
+            } else {
+                windowManager.defaultDisplay
+            } ?: return
+            val currentMode = activeDisplay.mode
+            val bestMode = activeDisplay.supportedModes
+                .filter {
+                    it.physicalWidth == currentMode.physicalWidth &&
+                        it.physicalHeight == currentMode.physicalHeight
+                }
+                .maxByOrNull { it.refreshRate }
+                ?: activeDisplay.supportedModes.maxByOrNull { it.refreshRate }
+                ?: return
+            if (bestMode.refreshRate > currentMode.refreshRate || window.attributes.preferredDisplayModeId != bestMode.modeId) {
+                window.attributes = window.attributes.apply {
+                    preferredDisplayModeId = bestMode.modeId
+                }
+            }
+        } catch (_: Throwable) {
+            // Safe fallback on devices/emulators that restrict display mode selection
+        }
+    }
 }
 
 @Composable
@@ -143,13 +171,8 @@ fun OrosiFinanceApp(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    var showSplashIntro by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) {
         com.example.ui.components.JibemanAssetLogoCache.preloadAsync(context)
-    }
-    LaunchedEffect(Unit) {
-        delay(300L)
-        showSplashIntro = false
     }
 
     var hasSmsPermission by remember {
@@ -560,68 +583,6 @@ fun OrosiFinanceApp(
             onDeleteAccount = { bankName -> viewModel.deleteBankAccount(bankName) },
             onDismiss = { viewModel.dismissAccountEditSheet() }
         )
-    }
-
-    // Sleek 600ms Animated Splash/Intro Screen on Cold Launch
-    AnimatedVisibility(
-        visible = showSplashIntro,
-        enter = fadeIn(animationSpec = tween(220)),
-        exit = fadeOut(animationSpec = tween(320)) + scaleOut(
-            targetScale = 1.06f,
-            animationSpec = tween(320)
-        )
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            PersianLapisDeep,
-                            OrosiSurface,
-                            OrosiSurfaceLowest
-                        )
-                    )
-                )
-                .clickable(enabled = true) { showSplashIntro = false }
-                .testTag("splash_intro_overlay"),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-                modifier = Modifier.padding(horizontal = 32.dp)
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(28.dp),
-                    color = PersianLapis.copy(alpha = 0.85f),
-                    modifier = Modifier
-                        .size(104.dp)
-                        .border(
-                            1.5.dp,
-                            NishapurTurquoiseBright.copy(alpha = 0.65f),
-                            RoundedCornerShape(28.dp)
-                        )
-                ) {
-                    Image(
-                        painter = painterResource(id = R.drawable.ic_launcher_foreground),
-                        contentDescription = "لوگوی خیال راحت",
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(10.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.height(20.dp))
-                Text(
-                    text = "خیال راحت",
-                    style = MaterialTheme.typography.headlineMedium.copy(
-                        fontSize = 28.sp,
-                        fontWeight = FontWeight.ExtraBold
-                    ),
-                    color = AlabasterSilk
-                )
-            }
-        }
     }
 }
 

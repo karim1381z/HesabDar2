@@ -417,6 +417,63 @@ object JalaliCalendarUtils {
         return startCal.timeInMillis to endCal.timeInMillis
     }
 
+    fun monthIndexOf(monthName: String): Int? {
+        val norm = PersianNumberUtils.normalizePersianText(monthName.trim())
+        val idx = persianMonths.indexOf(norm)
+        return if (idx in 1..12) idx else null
+    }
+
+    /**
+     * Converts a canonical Jalali date string like `"۲۸ آبان ۱۴۰۵"` into an epoch timestamp
+     * in `Asia/Tehran` timezone, preserving the time-of-day from [referenceNowMillis] (or noon).
+     */
+    fun jalaliDateStringToTimestampMillis(
+        dateWithYear: String,
+        referenceNowMillis: Long = System.currentTimeMillis()
+    ): Long? {
+        val norm = PersianNumberUtils.normalizePersianText(dateWithYear.trim())
+        if (norm.isBlank()) return null
+        val parts = norm.split(Regex("""\s+""")).filter { it.isNotBlank() }
+        if (parts.size < 2) return null
+        val jd = PersianNumberUtils.toEnglishDigits(parts[0]).toIntOrNull() ?: return null
+        val jm = monthIndexOf(parts[1]) ?: return null
+        val refJalali = fromTimestamp(referenceNowMillis)
+        val jy = if (parts.size >= 3) {
+            PersianNumberUtils.toEnglishDigits(parts[2]).toIntOrNull() ?: refJalali.year
+        } else {
+            refJalali.year
+        }
+        val maxDay = daysInJalaliMonth(jy, jm)
+        if (jd !in 1..maxDay) return null
+        val (gy, gm, gd) = jalaliToGregorian(jy, jm, jd)
+        val refCal = Calendar.getInstance(tehranTimeZone, Locale.US).apply {
+            timeInMillis = referenceNowMillis
+        }
+        val targetCal = Calendar.getInstance(tehranTimeZone, Locale.US).apply {
+            set(Calendar.YEAR, gy)
+            set(Calendar.MONTH, gm - 1)
+            set(Calendar.DAY_OF_MONTH, gd)
+            set(Calendar.HOUR_OF_DAY, refCal.get(Calendar.HOUR_OF_DAY))
+            set(Calendar.MINUTE, refCal.get(Calendar.MINUTE))
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        return targetCal.timeInMillis
+    }
+
+    /**
+     * Formats `"۲۸ آبان ۱۴۰۵"` concisely as `"۲۸ آبان"` when it belongs to the current Jalali year.
+     */
+    fun stripYearFromJalaliDate(
+        dateWithYear: String,
+        referenceNowMillis: Long = System.currentTimeMillis()
+    ): String {
+        val trimmed = dateWithYear.trim()
+        if (trimmed.isBlank()) return ""
+        val currentYearPersian = PersianNumberUtils.toPersianDigits(fromTimestamp(referenceNowMillis).year.toString())
+        return trimmed.removeSuffix(" $currentYearPersian").trim()
+    }
+
     fun shiftJalaliYearMonth(yearMonthKey: Int, deltaMonths: Int): Int {
         var year = yearMonthKey / 100
         var month = (yearMonthKey % 100) + deltaMonths
@@ -1423,7 +1480,9 @@ data class ParsedVoiceExpense(
     val dueDateHint: String = "",
     val eventDayOffset: Int = 0,        // e.g. -1 = دیروز/دیشب, -2 = پریروز
     val commitmentSubLabel: String = "", // e.g. "برنامه خرید", "درآمد آینده", "بدهی", "طلب"
-    val matchedBankTxId: Long? = null   // Non-null when auto-matched / user-linked to an untagged bank SMS row
+    val matchedBankTxId: Long? = null,   // Non-null when auto-matched / user-linked to an untagged bank SMS row
+    val isApproximateAmount: Boolean = false, // True for "یک و صد و خورده‌ای", "حدود ۵۰۰ تومن", etc.
+    val explicitJalaliDate: String = ""       // Canonical Jalali date e.g. "۲۸ آبان ۱۴۰۵" when spoken explicitly
 ) {
     val title: String
         get() = purposeCategory
@@ -1451,29 +1510,38 @@ data class UntaggedSmsCandidate(
 )
 
 /**
- * Result of matching a single spoken voice item against untagged same-day bank SMS transactions.
- * - [matchedCandidate]: exact amount + same Jalali day + same direction match (auto-linked by default).
- * - [suggestedCandidate]: closest remaining unclaimed same-day bank SMS of the same direction when no exact
- *   match exists (so user saves as cash by default OR links to the closest bank SMS with 1 tap).
+ * Result of matching a single spoken voice item against untagged bank SMS transactions.
+ * - [matchedCandidate]: auto-linked bank SMS (either exact amount or approximate auto-match).
+ * - [suggestedCandidate]: closest remaining unclaimed eligible bank SMS of the same direction when no
+ *   auto-match occurred (so user saves as cash by default OR links to the closest bank SMS with 1 tap).
+ * - [isExactAutoMatch]: true when matched with exact amount.
+ * - [isApproximateAutoMatch]: true when spoken amount was approximate ("خورده‌ای"/"حدود") and auto-linked
+ *   to the closest bank SMS while preserving the bank's authoritative exact amount.
  */
 data class VoiceSmsMatchResult(
     val matchedCandidate: UntaggedSmsCandidate? = null,
     val suggestedCandidate: UntaggedSmsCandidate? = null,
-    val isExactAutoMatch: Boolean = false
+    val isExactAutoMatch: Boolean = false,
+    val isApproximateAutoMatch: Boolean = false
 )
 
 /**
  * Pure P0/P1 batch voice-to-bank-SMS matcher:
  * 1. Never matches future commitments (`isCommitment == true`) or zero-amount items.
- * 2. Matches strictly within the spoken item's target Jalali day (`nowMillis + eventDayOffset * 86_400_000L`)
- *    and matching transaction direction (`INCOME` vs `EXPENSE`).
- * 3. Performs 1-to-1 greedy exact-amount matching first so multiple identical-amount purchases on the
- *    same day map cleanly to distinct bank SMS rows without double-claiming.
- * 4. For remaining unmatched spoken items, suggests the closest unclaimed same-day untagged bank SMS
- *    (handling rounding or transfer fees) so the user can choose cash vs. link with 1 tap.
+ * 2. Smart Window:
+ *    - Explicit Jalali date (`"۲۸ آبان"`) or explicit past offset (`"دیروز"`, `"پریروز"`) matches STRICTLY that Jalali day.
+ *    - Default (`"امروز"` or no date spoken) matches today's Jalali date FIRST, then seamlessly falls back
+ *      to the last 36 hours (`0..36h`) so late-night users (e.g., 03:24 AM referring to yesterday afternoon's SMS as "امروز")
+ *      always get automatic matching!
+ * 3. Pass 1A: 1-to-1 greedy exact-amount match on exact target Jalali day.
+ * 4. Pass 1B: 1-to-1 greedy exact-amount match within the 36h smart rolling window for default-window items.
+ * 5. Pass 2: 1-to-1 approximate auto-match for items with `isApproximateAmount == true` (e.g., "یک و صد و خورده‌ای" -> `1,161,741`),
+ *    preserving the authoritative bank SMS amount on save with 1-tap unlink.
+ * 6. Pass 3: Suggests the closest unclaimed eligible bank SMS for remaining non-commitment items.
  */
 object OrosiVoiceSmsMatcher {
     private const val DAY_MS = 86_400_000L
+    private const val SMART_RECENT_WINDOW_MS = 36L * 3_600_000L
 
     fun matchBatch(
         items: List<ParsedVoiceExpense>,
@@ -1486,57 +1554,146 @@ object OrosiVoiceSmsMatcher {
         val sortedCandidates = untaggedBankSms.sortedByDescending { it.timestamp }
         val claimedIds = HashSet<Long>()
         val results = MutableList(items.size) { VoiceSmsMatchResult() }
+        val todayDate = JalaliCalendarUtils.timestampToJalali(nowMillis).dateWithYear
+
         val itemTargetDates = Array(items.size) { idx ->
-            val offset = items[idx].eventDayOffset
-            JalaliCalendarUtils.timestampToJalali(nowMillis + offset * DAY_MS).dateWithYear
+            val item = items[idx]
+            when {
+                item.explicitJalaliDate.isNotBlank() -> item.explicitJalaliDate.trim()
+                item.eventDayOffset != 0 ->
+                    JalaliCalendarUtils.timestampToJalali(nowMillis + item.eventDayOffset * DAY_MS).dateWithYear
+                else -> todayDate
+            }
+        }
+        val itemUsesSmart36hWindow = BooleanArray(items.size) { idx ->
+            items[idx].explicitJalaliDate.isBlank() && items[idx].eventDayOffset == 0
         }
 
-        // Pass 1: 1-to-1 exact amount + same Jalali day + same direction
+        fun isWithinSmart36h(cand: UntaggedSmsCandidate): Boolean {
+            val age = nowMillis - cand.timestamp
+            return age in 0L..SMART_RECENT_WINDOW_MS
+        }
+
+        fun eligiblePoolFor(idx: Int): List<UntaggedSmsCandidate> {
+            val item = items[idx]
+            val targetDate = itemTargetDates[idx]
+            val useSmart36h = itemUsesSmart36hWindow[idx]
+            val sameDay = sortedCandidates.filter { cand ->
+                cand.id !in claimedIds &&
+                    cand.isIncome == item.isIncome &&
+                    cand.jalaliDate == targetDate
+            }
+            if (!useSmart36h) return sameDay
+            val recentFallback = sortedCandidates.filter { cand ->
+                cand.id !in claimedIds &&
+                    cand.isIncome == item.isIncome &&
+                    cand.jalaliDate != targetDate &&
+                    isWithinSmart36h(cand)
+            }
+            return sameDay + recentFallback
+        }
+
+        // Pass 1A: 1-to-1 exact amount on exact target Jalali day
         for (i in items.indices) {
             val item = items[i]
             if (item.isCommitment || item.totalAmountToman <= 0L) continue
             val targetDate = itemTargetDates[i]
-            val exact = sortedCandidates.firstOrNull { cand ->
+            val exactSameDay = sortedCandidates.firstOrNull { cand ->
                 cand.id !in claimedIds &&
                     cand.jalaliDate == targetDate &&
                     cand.isIncome == item.isIncome &&
                     cand.amountToman == item.totalAmountToman
             }
-            if (exact != null) {
-                claimedIds.add(exact.id)
+            if (exactSameDay != null) {
+                claimedIds.add(exactSameDay.id)
                 results[i] = VoiceSmsMatchResult(
-                    matchedCandidate = exact,
+                    matchedCandidate = exactSameDay,
                     suggestedCandidate = null,
-                    isExactAutoMatch = true
+                    isExactAutoMatch = true,
+                    isApproximateAutoMatch = false
                 )
             }
         }
 
-        // Pass 2: Closest unclaimed same-day same-direction suggestion for remaining non-commitment items
+        // Pass 1B: 1-to-1 exact amount in 36h smart rolling window (for late-night default items)
+        for (i in items.indices) {
+            if (results[i].matchedCandidate != null) continue
+            if (!itemUsesSmart36hWindow[i]) continue
+            val item = items[i]
+            if (item.isCommitment || item.totalAmountToman <= 0L) continue
+            val exactRecent = sortedCandidates.firstOrNull { cand ->
+                cand.id !in claimedIds &&
+                    cand.isIncome == item.isIncome &&
+                    cand.amountToman == item.totalAmountToman &&
+                    isWithinSmart36h(cand)
+            }
+            if (exactRecent != null) {
+                claimedIds.add(exactRecent.id)
+                results[i] = VoiceSmsMatchResult(
+                    matchedCandidate = exactRecent,
+                    suggestedCandidate = null,
+                    isExactAutoMatch = true,
+                    isApproximateAutoMatch = false
+                )
+            }
+        }
+
+        // Pass 2: 1-to-1 approximate auto-match for items marked isApproximateAmount (e.g. "یک و صد و خورده‌ای" -> 1,161,741)
+        for (i in items.indices) {
+            if (results[i].matchedCandidate != null) continue
+            val item = items[i]
+            if (item.isCommitment || item.totalAmountToman <= 0L || !item.isApproximateAmount) continue
+
+            val pool = eligiblePoolFor(i)
+            if (pool.isEmpty()) continue
+
+            val base = item.totalAmountToman
+            val upperExtra = kotlin.math.max(150_000L, (base * 0.15).toLong())
+            val symmetricDelta = kotlin.math.max(100_000L, (base * 0.12).toLong())
+            val approxCandidates = pool.filter { cand ->
+                val diff = cand.amountToman - base
+                (diff in 0L..upperExtra) || (kotlin.math.abs(diff) <= symmetricDelta)
+            }
+            val bestApprox = approxCandidates.minWithOrNull(
+                compareBy<UntaggedSmsCandidate> { if (it.jalaliDate == itemTargetDates[i]) 0 else 1 }
+                    .thenBy { kotlin.math.abs(it.amountToman - base) }
+            )
+            if (bestApprox != null) {
+                claimedIds.add(bestApprox.id)
+                results[i] = VoiceSmsMatchResult(
+                    matchedCandidate = bestApprox,
+                    suggestedCandidate = null,
+                    isExactAutoMatch = false,
+                    isApproximateAutoMatch = true
+                )
+            }
+        }
+
+        // Pass 3: Closest unclaimed eligible same-direction suggestion for remaining non-commitment items
         for (i in items.indices) {
             if (results[i].matchedCandidate != null) continue
             val item = items[i]
             if (item.isCommitment || item.totalAmountToman <= 0L) continue
             val targetDate = itemTargetDates[i]
-            val sameDayPool = sortedCandidates.filter { cand ->
-                cand.id !in claimedIds &&
-                    cand.jalaliDate == targetDate &&
-                    cand.isIncome == item.isIncome
-            }
-            if (sameDayPool.isEmpty()) continue
+            val pool = eligiblePoolFor(i)
+            if (pool.isEmpty()) continue
 
-            val closest = sameDayPool.minByOrNull { cand ->
+            val sameDayPool = pool.filter { it.jalaliDate == targetDate }
+            val activePool = if (sameDayPool.isNotEmpty()) sameDayPool else pool
+
+            val closest = activePool.minByOrNull { cand ->
                 kotlin.math.abs(cand.amountToman - item.totalAmountToman)
             } ?: continue
 
             val diff = kotlin.math.abs(closest.amountToman - item.totalAmountToman)
             val maxAmount = kotlin.math.max(closest.amountToman, item.totalAmountToman).coerceAtLeast(1L)
-            val isReasonablyClose = diff <= 50_000L || (diff.toDouble() / maxAmount.toDouble()) <= 0.35 || sameDayPool.size <= 2
+            val isReasonablyClose = diff <= 50_000L || (diff.toDouble() / maxAmount.toDouble()) <= 0.35 || activePool.size <= 2
             if (isReasonablyClose) {
                 results[i] = VoiceSmsMatchResult(
                     matchedCandidate = null,
                     suggestedCandidate = closest,
-                    isExactAutoMatch = false
+                    isExactAutoMatch = false,
+                    isApproximateAutoMatch = false
                 )
             }
         }
@@ -1648,9 +1805,27 @@ object PersianVoiceSlangParserEngine {
         "واریز کردم",
         "دریافت کردم",
         "دریافت شد",
+        "واریز شد به حسابم",
+        "ریخته شد به حسابم",
+        "واریز شد به کارتم",
         "واریز شد",
+        "اومد به حسابم",
+        "آمد به حسابم",
+        "اومده به حسابم",
+        "آمده به حسابم",
+        "اومد تو حسابم",
+        "آمد تو حسابم",
+        "اومد به کارتم",
+        "آمد به کارتم",
+        "اومد تو کارتم",
+        "آمد تو کارتم",
+        "نشست به حسابم",
+        "اومد به حساب",
+        "آمد به حساب",
         "به حسابم اومد",
         "به حسابم آمد",
+        "به حسابم اومده",
+        "به حسابم آمده",
         "به حسابم نشست",
         "به کارتم ریخت",
         "به کارتم زد",
@@ -2140,7 +2315,7 @@ object PersianVoiceSlangParserEngine {
     }
 
     private val incomeSpeechRegex = Regex(
-        """(?<=^|\s)(?:دریافت\s+کردم|دریافت\s+شد|دریافتی|دریافت\s+وجه|واریز\s+شد|واریز\s+کردن|واریز\s+کردند|واریزی|واریز\s+به\s+حساب|واریز\s+حقوق|برام\s+ریختن|برام\s+ریختند|برایم\s+ریختند|برام\s+ریخت|برام\s+زدن|برام\s+زد|(?:حقوق|حقوقم|طلب|طلبم|طلبمو|پاداش|پاداشم|عیدی|سود|هدیه|جایزه|کارانه|پورسانت|یارانه|یارانه‌ام)(?:\s+[^\s]+){0,2}\s+(?:گرفتم|ریختن|ریختند|واریز\s+شد|اومد|آمد|نشست)|فروختم|بهم\s+داد|به\s+من\s+داد|به\s+حسابم\s+اومد|به\s+حسابم\s+آمد|به\s+حسابم\s+نشست|به\s+کارتم\s+ریخت|به\s+کارتم\s+زد|درآمدم|درآمد|طلبم\s+رو\s+داد|طلبم\s+را\s+داد|قرضم\s+رو\s+پس\s+داد|پس\s+گرفتم)(?=\s|$)|(?<=^|\s)(?:دریافت|واریز)$"""
+        """(?<=^|\s)(?:دریافت\s+کردم|دریافت\s+شد|دریافتی|دریافت\s+وجه|واریز\s+شد|واریز\s+کردن|واریز\s+کردند|واریزی|واریز\s+به\s+حساب|واریز\s+حقوق|برام\s+ریختن|برام\s+ریختند|برایم\s+ریختند|برام\s+ریخت|برام\s+زدن|برام\s+زد|(?:حقوق|حقوقم|طلب|طلبم|طلبمو|پاداش|پاداشم|عیدی|سود|هدیه|جایزه|کارانه|پورسانت|یارانه|یارانه‌ام)(?:\s+[^\s]+){0,2}\s+(?:گرفتم|ریختن|ریختند|واریز\s+شد|اومد|آمد|نشست)|فروختم|بهم\s+داد|به\s+من\s+داد|به\s+حسابم\s+اومد|به\s+حسابم\s+آمد|به\s+حسابم\s+اومده|به\s+حسابم\s+آمده|به\s+حسابم\s+نشست|به\s+کارتم\s+ریخت|به\s+کارتم\s+زد|(?:اومد|آمد|اومده|آمده|نشست|ریخته\s+شد|واریز\s+شد)\s+(?:به|تو|توی)\s+(?:حسابم|کارتم|حساب|کارت)|درآمدم|درآمد|طلبم\s+رو\s+داد|طلبم\s+را\s+داد|قرضم\s+رو\s+پس\s+داد|پس\s+گرفتم)(?=\s|$)|(?<=^|\s)(?:دریافت|واریز)$"""
     )
 
     private val nominalIncomeSubjectRegex = Regex(
@@ -2397,16 +2572,174 @@ object PersianVoiceSlangParserEngine {
         return colloquialMillionMacroRegex.containsMatchIn(clause)
     }
 
+    private val colloquialMillionLeadWordValues = mapOf(
+        "یک" to 1L, "یه" to 1L, "دو" to 2L, "سه" to 3L, "چهار" to 4L, "پنج" to 5L,
+        "شش" to 6L, "شیش" to 6L, "هفت" to 7L, "هشت" to 8L, "نه" to 9L, "ده" to 10L,
+        "یازده" to 11L, "دوازده" to 12L, "سیزده" to 13L, "چهارده" to 14L,
+        "پانزده" to 15L, "پونزده" to 15L, "شانزده" to 16L, "شونزده" to 16L,
+        "هفده" to 17L, "هجده" to 18L, "هیجده" to 18L, "نوزده" to 19L, "بیست" to 20L
+    )
+
+    private val colloquialMillionHundredsWordValues = mapOf(
+        "صد" to 100L, "یکصد" to 100L, "دویست" to 200L, "سیصد" to 300L,
+        "چهارصد" to 400L, "چارصد" to 400L, "پانصد" to 500L, "پونصد" to 500L,
+        "ششصد" to 600L, "شیشصد" to 600L, "هفتصد" to 700L, "هشتصد" to 800L, "نهصد" to 900L,
+        "نیم" to 500L
+    )
+
+    private val colloquialMillionSubWordValues = mapOf(
+        "ده" to 10L, "پانزده" to 15L, "پونزده" to 15L, "بیست" to 20L, "بیست و پنج" to 25L,
+        "سی" to 30L, "چهل" to 40L, "پنجاه" to 50L, "شصت" to 60L, "هفتاد" to 70L, "هشتاد" to 80L, "نود" to 90L
+    )
+
+    private val colloquialMillionLeadDigitPattern = """(?:۲۰|20|[۱1][۰-۹0-9]|[۱-۹1-9])"""
+
+    private val entityNumberGuardKeywords = setOf(
+        "سایز", "شماره", "مدل", "طبقه", "واحد", "پلاک", "خط", "کد",
+        "جلد", "صفحه", "فصل", "ترم", "کلاس", "پایه", "برگ", "ساعت",
+        "سایت", "وبسایت", "وب‌سایت", "شعبه", "ایستگاه", "سری", "نسخه",
+        "پژو", "پراید", "آیفون", "سامسونگ"
+    )
+
+    private fun isPrecededByEntityAttributeKeyword(text: String, matchStart: Int): Boolean {
+        if (matchStart <= 0) return false
+        val before = text.substring(0, matchStart).trimEnd()
+        if (before.isEmpty()) return false
+        val lastWord = before.substringAfterLast(' ').trim('،', ',', '.', ':', '؛')
+        return lastWord in entityNumberGuardKeywords
+    }
+
+    private val colloquialCompoundMillionRegex = Regex(
+        """(?<=^|\s)(${colloquialMillionLeadWordValues.keys.sortedByDescending { it.length }.joinToString("|")}|$colloquialMillionLeadDigitPattern)\s+و\s+(${colloquialMillionHundredsWordValues.keys.sortedByDescending { it.length }.joinToString("|")}|[۱-۹1-9][۰-۹0-9]{2})(?:\s+و\s+(${colloquialMillionSubWordValues.keys.sortedByDescending { it.length }.joinToString("|")}|[۰-۹0-9]{1,2}))?(?:\s+(?:و\s+)?(?:خورده‌ای|خوردهای|خورده\s+ای|خرده‌ای|خرده\s+ای|خورده))?(?:\s*(?:میلیون|ملیون|تومان|تومن|تومنش|تومانش|تومنی|تومانی))?(?!\s*(?:${(countingUnits + nonMonetaryMeasurementUnits + listOf("میلیارد", "میلیاردی")).sortedByDescending { it.length }.joinToString("|")})(?=\s|$))(?=\s|$|،)"""
+    )
+
+    private val approximateAmountSpeechRegex = Regex(
+        """(?<=^|\s)(?:(?:و\s+)?(?:خورده‌ای|خوردهای|خورده\s+ای|خرده‌ای|خرده\s+ای|و\s+خورده)|حدوداً|حدودا|حدود|نزدیکِ?|تقریباً|تقریبا|حوالی)(?=\s|$|،)"""
+    )
+
+    private val jalaliMonthsPattern = "فروردین|اردیبهشت|خرداد|تیر|مرداد|شهریور|مهر|آبان|آذر|دی|بهمن|اسفند"
+
+    private val persianDayWordsMap = mapOf(
+        "اول" to 1, "یکم" to 1, "یک" to 1,
+        "دوم" to 2, "دو" to 2,
+        "سوم" to 3, "سه" to 3,
+        "چهارم" to 4, "چهار" to 4,
+        "پنجم" to 5, "پنج" to 5,
+        "ششم" to 6, "شیشم" to 6, "شش" to 6, "شیش" to 6,
+        "هفتم" to 7, "هفت" to 7,
+        "هشتم" to 8, "هشت" to 8,
+        "نهم" to 9, "نه" to 9,
+        "دهم" to 10, "ده" to 10,
+        "یازدهم" to 11, "یازده" to 11,
+        "دوازدهم" to 12, "دوازده" to 12,
+        "سیزدهم" to 13, "سیزده" to 13,
+        "چهاردهم" to 14, "چهارده" to 14,
+        "پانزدهم" to 15, "پونزدهم" to 15, "پانزده" to 15, "پونزده" to 15,
+        "شانزدهم" to 16, "شونزدهم" to 16, "شانزده" to 16, "شونزده" to 16,
+        "هفدهم" to 17, "هفده" to 17,
+        "هجدهم" to 18, "هیجدهم" to 18, "هجده" to 18, "هیجده" to 18,
+        "نوزدهم" to 19, "نوزده" to 19,
+        "بیستم" to 20, "بیست" to 20,
+        "بیست و یکم" to 21, "بیست و یک" to 21,
+        "بیست و دوم" to 22, "بیست و دو" to 22,
+        "بیست و سوم" to 23, "بیست و سه" to 23,
+        "بیست و چهارم" to 24, "بیست و چهار" to 24,
+        "بیست و پنجم" to 25, "بیست و پنج" to 25,
+        "بیست و ششم" to 26, "بیست و شیشم" to 26, "بیست و شش" to 26, "بیست و شیش" to 26,
+        "بیست و هفتم" to 27, "بیست و هفت" to 27,
+        "بیست و هشتم" to 28, "بیست و هشت" to 28,
+        "بیست و نهم" to 29, "بیست و نه" to 29,
+        "سی‌ام" to 30, "سی ام" to 30, "سیم" to 30, "سی" to 30,
+        "سی و یکم" to 31, "سی و یک" to 31
+    )
+
+    private val explicitJalaliDateRegex = Regex(
+        """(?<=^|\s)(?:(?:روز|تاریخ|مورخ)\s+)?([۰-۹0-9]{1,2}(?:م|ام)?|${persianDayWordsMap.keys.sortedByDescending { it.length }.joinToString("|")})\s+($jalaliMonthsPattern)(?:\s+ماه)?(?:\s+([۱1][۳3۴4][۰-۹0-9]{2}))?(?=\s|$|،)"""
+    )
+
+    /**
+     * Extracts an explicit spoken Jalali date (e.g. `"۲۸ آبان"` or `"بیست و هشت آبان"`)
+     * into canonical `JalaliDateTime.dateWithYear` format (e.g. `"۲۸ آبان ۱۴۰۵"`).
+     * Never falsely matches brand names containing month words (e.g. `"صرافی آبان تتر"`).
+     */
+    fun extractExplicitJalaliDate(
+        rawSpeech: String,
+        nowMillis: Long = System.currentTimeMillis()
+    ): Pair<String, String> {
+        val norm = PersianNumberUtils.normalizePersianText(rawSpeech.trim())
+        if (norm.isBlank()) return "" to norm
+        val match = explicitJalaliDateRegex.find(norm) ?: return "" to norm
+        val rawDay = match.groupValues[1].trim().removeSuffix("ام").removeSuffix("م").trim()
+        val monthName = match.groupValues[2].trim()
+        val rawYear = match.groupValues[3].trim()
+
+        val dayInt = persianDayWordsMap[rawDay]
+            ?: PersianNumberUtils.toEnglishDigits(rawDay).toIntOrNull()
+            ?: return "" to norm
+        val monthInt = JalaliCalendarUtils.monthIndexOf(monthName) ?: return "" to norm
+        val refJalali = JalaliCalendarUtils.fromTimestamp(nowMillis)
+        val yearInt = if (rawYear.isNotBlank()) {
+            PersianNumberUtils.toEnglishDigits(rawYear).toIntOrNull() ?: refJalali.year
+        } else {
+            refJalali.year
+        }
+        val maxDays = JalaliCalendarUtils.daysInJalaliMonth(yearInt, monthInt)
+        if (dayInt !in 1..maxDays) return "" to norm
+
+        val canonical = "${PersianNumberUtils.toPersianDigits(dayInt.toString())} $monthName ${PersianNumberUtils.toPersianDigits(yearInt.toString())}"
+        val stripped = norm.removeRange(match.range).replace(whitespaceRegex, " ").trim()
+        return canonical to stripped
+    }
+
+    fun isApproximateAmountSpeech(rawSpeech: String): Boolean {
+        val norm = PersianNumberUtils.normalizePersianText(rawSpeech.trim())
+        if (norm.isBlank()) return false
+        return approximateAmountSpeechRegex.containsMatchIn(norm)
+    }
+
+    private fun parseColloquialCompoundMillionToman(text: String): Long {
+        var maxAmount = 0L
+        for (m in colloquialCompoundMillionRegex.findAll(text)) {
+            if (isPrecededByEntityAttributeKeyword(text, m.range.first)) continue
+            val leadStr = m.groupValues[1].trim()
+            val hundredsStr = m.groupValues[2].trim()
+            val subStr = m.groupValues[3].trim()
+
+            val leadVal = colloquialMillionLeadWordValues[leadStr]
+                ?: PersianNumberUtils.toEnglishDigits(leadStr).toLongOrNull()
+                ?: continue
+            if (leadVal !in 1L..20L) continue
+
+            val hundredsVal = colloquialMillionHundredsWordValues[hundredsStr]
+                ?: PersianNumberUtils.toEnglishDigits(hundredsStr).toLongOrNull()
+                ?: continue
+            if (hundredsVal !in 100L..999L) continue
+
+            val subVal = if (subStr.isNotBlank()) {
+                colloquialMillionSubWordValues[subStr]
+                    ?: PersianNumberUtils.toEnglishDigits(subStr).toLongOrNull()
+                    ?: 0L
+            } else {
+                0L
+            }
+
+            val total = leadVal * 1_000_000L + (hundredsVal + subVal) * 1_000L
+            if (total > maxAmount) maxAmount = total
+        }
+        return maxAmount
+    }
+
     /**
      * Parses spoken Persian numbers and digits into Tomans while ignoring item quantities and mental-math sub-prices:
+     * - Strips explicit Jalali dates (`"۲۸ آبان"`) so day numbers are never confused with amounts.
+     * - Supports colloquial compound million shorthand (`"یک و صد و خورده‌ای"` -> `1,100,000`, `"دو و پونصد"` -> `2,500,000`, `"یک و نیم"` -> `1,500,000`).
      * - Strips bare stumbled numbers before `<number> <currency>` (e.g. "۲۱۷ ۲۱۸ تومن" -> "۲۱۸ تومن").
-     * - When a clause contains multiple currency amounts (e.g. "۳۹ هزار تومان دادم به دو تا سه تا ۵ تومن ۵ تومن نانوایی"),
-     *   takes the LARGEST explicit currency amount in that clause (`39,000` Tomans), ignoring smaller sub-amounts (`۵ تومن`).
-     * - Disambiguates colloquial Iranian `"تومن"` scale: when no explicit `"هزار"`/`"میلیون"` is spoken and the clause
-     *   describes a macro Iranian category (`حقوق`, `اجاره`, `رهن`, `ماشین`, `خانه`, `قسط‌های بزرگ`), `۳۰ تومن` -> `30,000,000` Tomans.
+     * - When a clause contains multiple currency amounts, takes the LARGEST explicit currency amount in that clause.
+     * - Disambiguates colloquial Iranian `"تومن"` scale for macro categories (`حقوق`, `اجاره`, `رهن`, `ماشین`, `خانه`, `قسط‌های بزرگ`).
      */
     fun parseSpokenPersianAmountToman(rawText: String): Long {
-        val cleaned = stripStumbledNumbers(PersianNumberUtils.normalizePersianText(rawText.trim()))
+        val dateStripped = extractExplicitJalaliDate(rawText).second
+        val cleaned = stripStumbledNumbers(PersianNumberUtils.normalizePersianText(dateStripped.trim()))
         if (cleaned.isBlank()) return 0L
 
         for ((phrase, amt) in exactPhraseAmounts) {
@@ -2415,6 +2748,12 @@ object PersianVoiceSlangParserEngine {
 
         val protectedText = protectItemQuantities(cleaned).protectedText
         val textWithoutQtyPlaceholders = protectedText.replace(Regex("""⟪QTY[A-Z]+⟫"""), " ")
+
+        val compoundMillionAmt = parseColloquialCompoundMillionToman(textWithoutQtyPlaceholders)
+        if (compoundMillionAmt > 0L) {
+            return compoundMillionAmt
+        }
+
         val engWithoutPlaceholders = PersianNumberUtils.toEnglishDigits(textWithoutQtyPlaceholders)
 
         // 1. Check ALL numeric digit amounts in the clause.
@@ -2734,8 +3073,10 @@ object PersianVoiceSlangParserEngine {
         if (trimmed.isBlank()) return emptyList()
 
         val numberWordsPattern = numberWordTokens.keys.sortedByDescending { it.length }.joinToString("|")
+        val leadMillionsPattern = colloquialMillionLeadWordValues.keys.sortedByDescending { it.length }.joinToString("|")
+        val hundredsMillionsPattern = colloquialMillionHundredsWordValues.keys.sortedByDescending { it.length }.joinToString("|")
         val amountStartRegex = Regex(
-            """(?<=^|\s)(?:[۰-۹0-9][۰-۹0-9,٬،]*(?:\.[۰-۹0-9]+)?|(?:$numberWordsPattern)(?:\s+و\s+(?:$numberWordsPattern))*)\s+(?:میلیاردی|میلیارد|میلیونی|میلیون|ملیون|هزار\s*تومانش|هزار\s*تومنش|هزار\s*تومانی|هزار\s*تومنی|هزار\s*تومان|هزار\s*تومن|هزارش|هزاری|هزار|تومانش|تومنش|تومانی|تومنی|تومان|تومن|ریالش|ریالی|ریال)(?=\s|$)"""
+            """(?<=^|\s)(?:(?:$leadMillionsPattern|[۰-۹0-9]{1,2})\s+و\s+(?:$hundredsMillionsPattern|[۱-۹1-9][۰-۹0-9]{2})(?:\s+و\s+(?:$numberWordsPattern|[۰-۹0-9]{1,2}))?(?:\s+(?:و\s+)?(?:خورده‌ای|خوردهای|خورده\s+ای|خرده‌ای|خرده\s+ای|خورده))?|(?:[۰-۹0-9][۰-۹0-9,٬،]*(?:\.[۰-۹0-9]+)?|(?:$numberWordsPattern)(?:\s+و\s+(?:$numberWordsPattern))*)\s+(?:میلیاردی|میلیارد|میلیونی|میلیون|ملیون|هزار\s*تومانش|هزار\s*تومنش|هزار\s*تومانی|هزار\s*تومنی|هزار\s*تومان|هزار\s*تومن|هزارش|هزاری|هزار|تومانش|تومنش|تومانی|تومنی|تومان|تومن|ریالش|ریالی|ریال))(?=\s|$|،)"""
         )
 
         val matches = amountStartRegex.findAll(trimmed).toList()
@@ -2801,16 +3142,32 @@ object PersianVoiceSlangParserEngine {
         val softResolved = resolveSoftCancelledWantButClauses(selfCorrected)
         val normalized = stripMentalMathChains(softResolved)
 
-        // Protect " و " inside compound Persian numbers (e.g. "سی و نه", "بیست و پنج", "یک میلیون و دویست")
+        // Protect " و " inside:
+        // 1) compound Persian numbers ("سی و نه", "بیست و پنج", "یک میلیون و دویست")
+        // 2) colloquial compound million shorthands ("یک و صد", "یک و دویست", "دو و پونصد", "یک و نیم", "۱ و ۲۰۰")
+        // 3) approximate "و خورده‌ای" tails ("یک و صد و خورده‌ای")
         val prefixPattern = compoundMoneyPrefixWords.sortedByDescending { it.length }.joinToString("|")
         val numWordsPattern = (numberWordTokens.keys + setOf("نیم")).sortedByDescending { it.length }.joinToString("|")
+        val leadMillionsPattern = colloquialMillionLeadWordValues.keys.sortedByDescending { it.length }.joinToString("|")
+        val hundredsMillionsPattern = colloquialMillionHundredsWordValues.keys.sortedByDescending { it.length }.joinToString("|")
         val compoundVavRegex = Regex("""(?<=^|\s)($prefixPattern)\s+و\s+(?=($numWordsPattern)(?=\s|$))""")
+        val colloquialMillionVavRegex = Regex("""(?<=^|\s)($leadMillionsPattern|$colloquialMillionLeadDigitPattern)\s+و\s+(?=($hundredsMillionsPattern|[۱-۹1-9][۰-۹0-9]{2})(?=\s|$|،))""")
+        val approxTailVavRegex = Regex("""\s+و\s+(?=(?:خورده‌ای|خوردهای|خورده\s+ای|خرده‌ای|خرده\s+ای|خورده)(?=\s|$|،))""")
+
         var protectedCompoundNums = normalized
+        protectedCompoundNums = colloquialMillionVavRegex.replace(protectedCompoundNums) { m ->
+            if (isPrecededByEntityAttributeKeyword(protectedCompoundNums, m.range.first)) {
+                m.value
+            } else {
+                "${m.groupValues[1]}⟪NUMVAV⟫"
+            }
+        }
         while (compoundVavRegex.containsMatchIn(protectedCompoundNums)) {
             protectedCompoundNums = compoundVavRegex.replace(protectedCompoundNums) { m ->
                 "${m.groupValues[1]}⟪NUMVAV⟫"
             }
         }
+        protectedCompoundNums = approxTailVavRegex.replace(protectedCompoundNums, "⟪NUMVAV⟫")
 
         // Also split on " که " when it introduces an itemized breakdown (e.g. "امروز ۵۰ هزار تومان خرج کردم که ۲۵ تومنش برای موز بود و ۳۵ تومنش برای بستنی")
         val splitPattern = if (!protectedCompoundNums.contains("دنگ") &&
@@ -3254,8 +3611,20 @@ object PersianVoiceSlangParserEngine {
                 """(?<=^|\s)(?:دیگه|دیگر|حسابم|کارتم|واریز|حقوق|درآمد|پاداش|میاد|می‌آید|می‌ریزن|میریزن)(?=\s|$)"""
             )
 
+            var inheritedExplicitDate = ""
+            val explicitTodayAnchorRegex = Regex("""(?<=^|\s)(?:امروز|الان|همین\s+الان)(?=\s|$)""")
+
             for (clause in mergedClauses) {
                 var parsed = parseSingleVoiceClause(clause, null, defaultBankName)
+                if (!parsed.isCommitment) {
+                    if (parsed.explicitJalaliDate.isNotBlank()) {
+                        inheritedExplicitDate = parsed.explicitJalaliDate
+                    } else if (parsed.eventDayOffset != 0 || explicitTodayAnchorRegex.containsMatchIn(clause)) {
+                        inheritedExplicitDate = ""
+                    } else if (inheritedExplicitDate.isNotBlank()) {
+                        parsed = parsed.copy(explicitJalaliDate = inheritedExplicitDate)
+                    }
+                }
                 if (parsed.isIncome && parsed.totalAmountToman > 0L && parsed.purposeCategory.isNotBlank()) {
                     // Contextual million promotion for follow-up bank inflows after a million-scale income
                     // (e.g. "پریروز ۳۰ تومن حقوق گرفتم فردا هم ۱۵ تومان دیگه میاد به حسابم" -> 15,000,000 Tomans)
@@ -3416,7 +3785,7 @@ object PersianVoiceSlangParserEngine {
     }
 
     private val settledObligationVerbRegex = Regex(
-        """(?<=^|\s)(?:دادم|پس\s+دادم|پرداخت\s+کردم|تسویه\s+کردم|واریز\s+کردم|گرفتم|پس\s+گرفتم|دریافت\s+کردم|واریز\s+شد|ریختن|ریختند|برگشت|برگردوند|برگرداند|خریدم|خرج\s+کردم)(?=\s|$)"""
+        """(?<=^|\s)(?:دادم|پس\s+دادم|پرداخت\s+کردم|تسویه\s+کردم|واریز\s+کردم|گرفتم|پس\s+گرفتم|دریافت\s+کردم|واریز\s+شد|ریخته\s+شد|ریختن|ریختند|اومد|آمد|اومده|آمده|نشست|برگشت|برگردوند|برگرداند|خریدم|خرج\s+کردم)(?=\s|$)"""
     )
 
     private val futureDebtClauseRegex = Regex(
@@ -3476,11 +3845,16 @@ object PersianVoiceSlangParserEngine {
         fallbackTotalToman: Long? = null,
         defaultBankName: String = "نقدی / دستی"
     ): ParsedVoiceExpense {
-        val cleaned = pivotNarrativeIntroKeepingAmountInternal(
-            stripStumbledNumbers(PersianNumberUtils.normalizePersianText(rawSpeech.trim()))
-        )
         val isTaggingExistingSms = fallbackTotalToman != null && fallbackTotalToman > 0L
-        val detectedCommitmentKind = if (isTaggingExistingSms) null else detectVoiceCommitmentKind(rawSpeech)
+        val (extractedExplicitDate, speechWithoutExplicitDate) = if (isTaggingExistingSms) {
+            "" to rawSpeech
+        } else {
+            extractExplicitJalaliDate(rawSpeech)
+        }
+        val cleaned = pivotNarrativeIntroKeepingAmountInternal(
+            stripStumbledNumbers(PersianNumberUtils.normalizePersianText(speechWithoutExplicitDate.trim()))
+        )
+        val detectedCommitmentKind = if (isTaggingExistingSms) null else detectVoiceCommitmentKind(speechWithoutExplicitDate)
         val isExpectedFutureInflow = detectedCommitmentKind == "RECEIVABLE" &&
             futureExpectedInflowRegex.containsMatchIn(cleaned) &&
             !futureReceivableClauseRegex.containsMatchIn(cleaned)
@@ -3495,20 +3869,28 @@ object PersianVoiceSlangParserEngine {
             else -> ""
         }
         val extractedDueDateHint = if (detectedCommitmentKind != null) {
-            dueDateHintRegex.find(cleaned)?.groupValues?.get(1)?.replace(whitespaceRegex, " ")?.trim().orEmpty()
+            dueDateHintRegex.find(cleaned)?.groupValues?.get(1)?.replace(whitespaceRegex, " ")?.trim()
+                ?.ifBlank { JalaliCalendarUtils.stripYearFromJalaliDate(extractedExplicitDate) }
+                ?: JalaliCalendarUtils.stripYearFromJalaliDate(extractedExplicitDate)
         } else {
             ""
         }
-        val extractedPastDayOffset = if (isTaggingExistingSms || detectedCommitmentKind != null) {
+        val effectiveExplicitJalaliDate = if (isTaggingExistingSms || detectedCommitmentKind != null) {
+            ""
+        } else {
+            extractedExplicitDate
+        }
+        val extractedPastDayOffset = if (isTaggingExistingSms || detectedCommitmentKind != null || effectiveExplicitJalaliDate.isNotBlank()) {
             0
         } else {
             extractPastRelativeDayOffset(rawSpeech)
         }
+        val isApproximate = !isTaggingExistingSms && isApproximateAmountSpeech(speechWithoutExplicitDate)
         val isIncomeClause = when {
             isTaggingExistingSms -> false
             detectedCommitmentKind == "RECEIVABLE" -> true
             detectedCommitmentKind == "DEBT" -> false
-            else -> detectVoiceTransactionIsIncome(rawSpeech)
+            else -> detectVoiceTransactionIsIncome(speechWithoutExplicitDate)
         }
 
         val speechBeforeDong = if (cleaned.contains("که") && (cleaned.contains("دنگ") || cleaned.contains("دُنگ") || cleaned.contains("سهم"))) {
@@ -3569,6 +3951,12 @@ object PersianVoiceSlangParserEngine {
         exactPhraseAmounts.forEach { (phrase, _) ->
             corePhrase = corePhrase.replace(phrase, " ")
         }
+        // Strip colloquial compound million shorthands ("یک و صد و خورده‌ای", "دو و پونصد", "۱ و ۲۰۰") & approximate words
+        corePhrase = colloquialCompoundMillionRegex.replace(corePhrase) { m ->
+            if (isPrecededByEntityAttributeKeyword(corePhrase, m.range.first)) m.value else " "
+        }
+        corePhrase = corePhrase.replace(approximateAmountSpeechRegex, " ")
+
         // Strip numeric digits (outside ⟪QTY...⟫ placeholders):
         // If an explicit currency/multiplier number exists in the clause (e.g. "۵۵ هزار تومان"),
         // ONLY strip currency-tagged numbers so bare brand/identifier numbers (e.g. "۵۰۴۰") stay intact!
@@ -3763,7 +4151,9 @@ object PersianVoiceSlangParserEngine {
             commitmentKind = detectedCommitmentKind,
             dueDateHint = extractedDueDateHint,
             eventDayOffset = extractedPastDayOffset,
-            commitmentSubLabel = commitmentSubLabel
+            commitmentSubLabel = commitmentSubLabel,
+            isApproximateAmount = isApproximate,
+            explicitJalaliDate = effectiveExplicitJalaliDate
         )
     }
 

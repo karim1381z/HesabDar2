@@ -1082,6 +1082,109 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun testColloquialCompoundMillionsApproximatePastInflowAndExplicitJalaliDatesV24() {
+        // 1. Exact real-device sentence from video dbatch_25
+        val dbatch25 = "خوب من امروز ۵۰۰ هزار تومان خرج تارا کردم یک و صد و خورده‌ای هم از صرافی آبان تتر اومد به حسابم"
+        val items = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(dbatch25)
+        assertEquals(2, items.size)
+
+        assertEquals("تارا", items[0].purposeCategory)
+        assertEquals(500_000L, items[0].totalAmountToman)
+        assertEquals(false, items[0].isIncome)
+        assertEquals(false, items[0].isCommitment)
+        assertEquals(false, items[0].isApproximateAmount)
+
+        assertEquals("صرافی آبان تتر", items[1].purposeCategory)
+        assertEquals(1_100_000L, items[1].totalAmountToman)
+        assertEquals(true, items[1].isIncome)
+        assertEquals(false, items[1].isCommitment)
+        assertEquals(true, items[1].isApproximateAmount)
+        assertEquals("", items[1].explicitJalaliDate)
+
+        // 2. Generalized colloquial compound million shorthands
+        val phone = PersianVoiceSlangParserEngine.parseVoiceCommand("دو و پونصد خرید گوشی")
+        assertEquals(2_500_000L, phone.totalAmountToman)
+        assertEquals("گوشی", phone.purposeCategory)
+
+        val rent = PersianVoiceSlangParserEngine.parseVoiceCommand("یک و دویست و پنجاه اجاره")
+        assertEquals(1_250_000L, rent.totalAmountToman)
+        assertEquals("اجاره", rent.purposeCategory)
+
+        val approxFood = PersianVoiceSlangParserEngine.parseVoiceCommand("حدود ۲۰۰ تومن شام")
+        assertEquals(200_000L, approxFood.totalAmountToman)
+        assertEquals("شام", approxFood.purposeCategory)
+        assertEquals(true, approxFood.isApproximateAmount)
+
+        // 3. Explicit Jalali date extraction & propagation without colliding with "صرافی آبان تتر"
+        val datedSingle = PersianVoiceSlangParserEngine.parseVoiceCommand("۲۸ آبان ۵۰۰ تومن خرج تارا کردم")
+        assertEquals("تارا", datedSingle.purposeCategory)
+        assertEquals(500_000L, datedSingle.totalAmountToman)
+        assertEquals(true, datedSingle.explicitJalaliDate.startsWith("۲۸ آبان "))
+
+        val datedMulti = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(
+            "۲۸ آبان ۵۰۰ تومن خرج تارا کردم و یک و صد و خورده‌ای از صرافی آبان تتر اومد به حسابم"
+        )
+        assertEquals(2, datedMulti.size)
+        assertEquals(true, datedMulti[0].explicitJalaliDate.startsWith("۲۸ آبان "))
+        assertEquals(datedMulti[0].explicitJalaliDate, datedMulti[1].explicitJalaliDate)
+        assertEquals("صرافی آبان تتر", datedMulti[1].purposeCategory)
+        assertEquals(1_100_000L, datedMulti[1].totalAmountToman)
+        assertEquals(true, datedMulti[1].isIncome)
+        assertEquals(true, datedMulti[1].isApproximateAmount)
+
+        // 4. Jalali date string round-trip conversion
+        val ts28Aban = JalaliCalendarUtils.jalaliDateStringToTimestampMillis("۲۸ آبان ۱۴۰۵")
+        assertEquals("۲۸ آبان ۱۴۰۵", JalaliCalendarUtils.timestampToJalali(ts28Aban!!).dateWithYear)
+    }
+
+    @Test
+    fun testLateNight36hSmartWindowAndApproximateBankSmsAutoMatchV24() {
+        val (gy29, gm29, gd29) = JalaliCalendarUtils.jalaliToGregorian(1405, 8, 29)
+        val tehranTz = java.util.TimeZone.getTimeZone("Asia/Tehran")
+        val now324Am = java.util.Calendar.getInstance(tehranTz).apply {
+            set(gy29, gm29 - 1, gd29, 3, 24, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+        val smsTaraMs = now324Am - (7L * 3_600_000L + 30L * 60_000L) // 28 Aban 19:54
+        val smsAbanMs = now324Am - (14L * 3_600_000L) // 28 Aban 13:24
+        val smsOldMs = now324Am - (48L * 3_600_000L) // 48h ago (outside 36h window!)
+
+        val date28 = JalaliCalendarUtils.timestampToJalali(smsTaraMs).dateWithYear
+        val date27 = JalaliCalendarUtils.timestampToJalali(smsOldMs).dateWithYear
+
+        val untaggedSms = listOf(
+            UntaggedSmsCandidate(501L, "بلو", 500_000L, false, smsTaraMs, date28, "۱۹:۵۴", "کارت بلو"),
+            UntaggedSmsCandidate(502L, "بلو", 1_161_741L, true, smsAbanMs, date28, "۱۳:۲۷", "کارت بلو"),
+            UntaggedSmsCandidate(503L, "سپه", 500_000L, false, smsOldMs, date27, "۱۰:۰۰", "کارت سپه")
+        )
+
+        val spokenItems = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(
+            "خوب من امروز ۵۰۰ هزار تومان خرج تارا کردم یک و صد و خورده‌ای هم از صرافی آبان تتر اومد به حسابم"
+        )
+        val matches = OrosiVoiceSmsMatcher.matchBatch(spokenItems, untaggedSms, nowMillis = now324Am)
+        assertEquals(2, matches.size)
+
+        // Item 0: exact match across midnight within 36h window -> Blu 500,000
+        assertEquals(501L, matches[0].matchedCandidate?.id)
+        assertEquals(true, matches[0].isExactAutoMatch)
+        assertEquals(false, matches[0].isApproximateAutoMatch)
+
+        // Item 1: approximate auto-match across midnight within 36h window -> Blu +1,161,741
+        assertEquals(502L, matches[1].matchedCandidate?.id)
+        assertEquals(false, matches[1].isExactAutoMatch)
+        assertEquals(true, matches[1].isApproximateAutoMatch)
+        assertEquals(1_161_741L, matches[1].matchedCandidate?.amountToman)
+
+        // Explicit older date ("۲۷ آبان") strictly matches ONLY 27 Aban (503L), not 28 Aban (501L)
+        val explicitOldItem = PersianVoiceSlangParserEngine.parseVoiceCommand("۲۷ آبان ۵۰۰ تومن خرج تارا کردم")
+            .copy(explicitJalaliDate = date27)
+        val explicitMatches = OrosiVoiceSmsMatcher.matchBatch(listOf(explicitOldItem), untaggedSms, nowMillis = now324Am)
+        assertEquals(503L, explicitMatches[0].matchedCandidate?.id)
+        assertEquals(true, explicitMatches[0].isExactAutoMatch)
+    }
+
+    @Test
     fun testFullOrosiRegressionAndStressSuitePasses100Percent() {
         val report = com.example.domain.OrosiRegressionSuite.runFullRegressionAndStressSuite()
         for (r in report.results) {
@@ -1092,8 +1195,9 @@ class ExampleUnitTest {
             )
         }
         assertEquals(true, report.allPassed)
-        assertEquals(45, report.totalCount)
-        assertEquals(45, report.passedCount)
+        assertEquals(com.example.domain.OrosiRegressionSuite.EXPECTED_TOTAL_CASES, report.totalCount)
+        assertEquals(60, report.totalCount)
+        assertEquals(60, report.passedCount)
     }
 }
 

@@ -30,6 +30,8 @@ data class RegressionSuiteReport(
  */
 object OrosiRegressionSuite {
 
+    const val EXPECTED_TOTAL_CASES = 60
+
     fun runFullRegressionAndStressSuite(): RegressionSuiteReport {
         val suiteStartNanos = System.nanoTime()
         val results = mutableListOf<RegressionTestCaseResult>()
@@ -867,6 +869,288 @@ object OrosiRegressionSuite {
             val subtitle = tx.simpleSubtitle
             val ok = tx.shortBankName == "نقدی / دستی" && subtitle.endsWith("• نقدی / دستی")
             ok to subtitle
+        }
+
+        // 46. Non-main account SMS (Blu Box / Piggybank / Loan) balance MUST NOT overwrite primary bank balance
+        recordTest(
+            category = "اقتدار مانده حساب (P0)",
+            title = "رد استخراج موجودی از پیامک باکس/قلک بلو و وام",
+            inputSummary = "بلوبانک: انتقال ۵۰۰,۰۰۰ ریال به باکس سفر - موجودی باکس: ۲,۵۰۰,۰۰۰ ریال",
+            expectedSummary = "موجودی استخراج‌شده = null (عدم تخریب مانده اصلی)"
+        ) {
+            val boxSms = "بلوبانک\nانتقال ۵۰۰,۰۰۰ ریال به باکس سفر\nموجودی باکس: ۲,۵۰۰,۰۰۰ ریال"
+            val loanSms = "بانک ملی\nقسط وام مسکن به مبلغ ۱۲,۰۰۰,۰۰۰ ریال سررسید شد\nمانده تسهیلات: ۴۵۰,۰۰۰,۰۰۰ ریال"
+            val boxBal = JibemanSmsEngine.extractBalanceRial(boxSms)
+            val loanBal = JibemanSmsEngine.extractBalanceRial(loanSms)
+            val ok = boxBal == null && loanBal == null
+            ok to "باکس=${boxBal ?: "null"} | وام=${loanBal ?: "null"}"
+        }
+
+        // 47. Cross-bank self-transfer detection & transparent pair disclosure in Payday Cycle
+        recordTest(
+            category = "ترازنامه ماه حقوقی و انتقال خودی (P0)",
+            title = "حذف خودکار جفت انتقال بین‌حسابی خودی (پاسارگاد ← بلو) از ورودی/خرج",
+            inputSummary = "برداشت ۳.۵ میلیون پاسارگاد + واریز ۳.۵ میلیون بلو (۹۰ ثانیه بعد) + خرج ۵۰۰ هزار بلو",
+            expectedSummary = "ورودی=۰ • خرج=۵۰۰,۰۰۰ • ۱ جفت خودی (پاسارگاد ← بلو)"
+        ) {
+            val (gy, gm, gd) = JalaliCalendarUtils.jalaliToGregorian(1405, 8, 28)
+            val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Tehran")).apply {
+                set(gy, gm - 1, gd, 15, 10, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }
+            val t0 = cal.timeInMillis
+            val summary = OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle(
+                transactions = listOf(
+                    CashflowTxSnapshot(1L, "EXPENSE", 3_500_000L, 3_500_000L, bankName = "پاسارگاد", timestamp = t0),
+                    CashflowTxSnapshot(2L, "INCOME", 3_500_000L, 3_500_000L, bankName = "بلو", timestamp = t0 + 90_000L),
+                    CashflowTxSnapshot(3L, "EXPENSE", 500_000L, 500_000L, bankName = "بلو", timestamp = t0 + 300_000L)
+                ),
+                paydayStartDay = 1,
+                reservedCommitmentsToman = 0L,
+                nowMillis = t0 + 600_000L
+            )
+            val pair = summary.excludedSelfTransferDetails.firstOrNull()
+            val ok = summary.totalIncomeToman == 0L &&
+                summary.totalExpenseToman == 500_000L &&
+                summary.excludedSelfTransferPairs == 1 &&
+                pair?.fromBankName == "پاسارگاد" &&
+                pair.toBankName == "بلو"
+            ok to "ورودی=${summary.totalIncomeToman} • خرج=${summary.totalExpenseToman} • جفت=${pair?.fromBankName}←${pair?.toBankName}"
+        }
+
+        // 48. Honest DEFICIT badge when monthly expenses exceed monthly income
+        recordTest(
+            category = "صداقت ترازنامه ماه حقوقی (P0)",
+            title = "نمایش صادقانه وضعیت «کسری تراز ماه جاری» هنگام پیشی گرفتن خرج از درآمد",
+            inputSummary = "ورودی ۲ میلیون • خرج ۳.۲ میلیون",
+            expectedSummary = "وضعیت = DEFICIT • تراز خالص = -۱,۲۰۰,۰۰۰"
+        ) {
+            val (gy, gm, gd) = JalaliCalendarUtils.jalaliToGregorian(1405, 8, 28)
+            val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Tehran")).apply {
+                set(gy, gm - 1, gd, 12, 0, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }
+            val t0 = cal.timeInMillis
+            val summary = OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle(
+                transactions = listOf(
+                    CashflowTxSnapshot(1L, "INCOME", 2_000_000L, 2_000_000L, bankName = "بلو", timestamp = t0),
+                    CashflowTxSnapshot(2L, "EXPENSE", 3_200_000L, 3_200_000L, bankName = "بلو", timestamp = t0 + 60_000L)
+                ),
+                paydayStartDay = 1,
+                reservedCommitmentsToman = 0L,
+                nowMillis = t0 + 120_000L
+            )
+            val ok = summary.healthStatus == CashflowHealthStatus.DEFICIT && summary.netBalanceToman == -1_200_000L
+            ok to "وضعیت=${summary.healthStatus} • تراز=${summary.netBalanceToman}"
+        }
+
+        // 49. Drop leftover / kept-aside balance commentary ("بقیه‌اش رو هم نگه داشتم")
+        recordTest(
+            category = "فیلتر توصیف مانده پول (P0)",
+            title = "عدم ساخت تراکنش جعلی از عبارت «بقیه‌اش رو هم نگه داشتم»",
+            inputSummary = "۵۰ تومن بستنی خریدم بقیه‌اش رو هم نگه داشتم",
+            expectedSummary = "فقط ۱ تراکنش: بستنی • ۵۰,۰۰۰ تومان"
+        ) {
+            val items = PersianVoiceSlangParserEngine.parseMultiVoiceCommands("۵۰ تومن بستنی خریدم بقیه‌اش رو هم نگه داشتم")
+            val ok = items.size == 1 && items[0].purposeCategory == "بستنی" && items[0].totalAmountToman == 50_000L
+            ok to "${items.size} مورد: ${items.joinToString(" | ") { "${it.purposeCategory} (${it.totalAmountToman})" }}"
+        }
+
+        // 50. Contrast split + Future Debt & Receivable routing to Commitments
+        recordTest(
+            category = "تفکیک تعهدات آینده از ویس (v2.2)",
+            title = "هدایت خودکار بدهی و طلب آینده به تعهدات با حفظ سررسید «فردا»",
+            inputSummary = "سلام من ۳۹ تومن بدهی دارم ولی فردا ۵۰ تومن طلب دارم",
+            expectedSummary = "بدهی (۳۹,۰۰۰ • DEBT) + طلب (۵۰,۰۰۰ • RECEIVABLE • فردا)"
+        ) {
+            val items = PersianVoiceSlangParserEngine.parseMultiVoiceCommands("سلام من ۳۹ تومن بدهی دارم ولی فردا ۵۰ تومن طلب دارم")
+            val ok = items.size == 2 &&
+                items[0].commitmentKind == "DEBT" && items[0].totalAmountToman == 39_000L &&
+                items[1].commitmentKind == "RECEIVABLE" && items[1].totalAmountToman == 50_000L && items[1].dueDateHint == "فردا"
+            ok to items.joinToString(" | ") { "${it.commitmentKind}:${it.totalAmountToman}:${it.dueDateHint}" }
+        }
+
+        // 51. Past relative date ("پریروز") + future expected inflow ("فردا هم ۱۵ تومان دیگه میاد به حسابم")
+        recordTest(
+            category = "تاریخ گذشته و واریز آینده (v2.2)",
+            title = "ثبت حقوق پریروز با آفست -۲ و هدایت واریز آینده فردا (۱۵ میلیون) به تعهدات",
+            inputSummary = "پریروز ۳۰ تومن حقوق گرفتم فردا هم ۱۵ تومان دیگه میاد به حسابم",
+            expectedSummary = "حقوق (+۳۰M • آفست -۲) + واریز آینده (+۱۵M • RECEIVABLE • فردا)"
+        ) {
+            val items = PersianVoiceSlangParserEngine.parseMultiVoiceCommands("پریروز ۳۰ تومن حقوق گرفتم فردا هم ۱۵ تومان دیگه میاد به حسابم")
+            val ok = items.size == 2 &&
+                !items[0].isCommitment && items[0].isIncome && items[0].totalAmountToman == 30_000_000L && items[0].eventDayOffset == -2 &&
+                items[1].commitmentKind == "RECEIVABLE" && items[1].commitmentSubLabel == "واریز آینده" && items[1].totalAmountToman == 15_000_000L && items[1].dueDateHint == "فردا"
+            ok to items.joinToString(" | ") { "${it.purposeCategory}:${it.totalAmountToman}:off=${it.eventDayOffset}:comm=${it.commitmentKind}/${it.commitmentSubLabel}" }
+        }
+
+        // 52. Planned future purchase ("می‌خوام دوچرخه بخرم ۱۵ تومن") -> DEBT commitment ("برنامه خرید")
+        recordTest(
+            category = "برنامه خرید آینده (v2.2)",
+            title = "تشخیص قصد خرید آینده «می‌خوام دوچرخه بخرم ۱۵ تومن» با مقیاس میلیون در تعهدات",
+            inputSummary = "می‌خوام دوچرخه بخرم ۱۵ تومن",
+            expectedSummary = "دوچرخه • ۱۵,۰۰۰,۰۰۰ • تعهد DEBT (برنامه خرید)"
+        ) {
+            val parsed = PersianVoiceSlangParserEngine.parseVoiceCommand("می‌خوام دوچرخه بخرم ۱۵ تومن")
+            val ok = parsed.commitmentKind == "DEBT" &&
+                parsed.commitmentSubLabel == "برنامه خرید" &&
+                parsed.totalAmountToman == 15_000_000L &&
+                parsed.purposeCategory.contains("دوچرخه")
+            ok to "${parsed.purposeCategory} • ${parsed.totalAmountToman} • ${parsed.commitmentKind}/${parsed.commitmentSubLabel}"
+        }
+
+        // 53. Settled debt/receivable remains a regular transaction (commitmentKind == null)
+        recordTest(
+            category = "تفکیک تسویه‌شده از تعهد آینده (v2.2)",
+            title = "ثبت «طلبم رو گرفتم» به عنوان دریافتی عادی و نه تعهد آینده",
+            inputSummary = "۵۰۰ تومن طلبم رو گرفتم",
+            expectedSummary = "دریافتی عادی (commitmentKind=null) • ۵۰۰,۰۰۰ تومان"
+        ) {
+            val parsed = PersianVoiceSlangParserEngine.parseVoiceCommand("۵۰۰ تومن طلبم رو گرفتم")
+            val ok = !parsed.isCommitment && parsed.isIncome && parsed.totalAmountToman == 500_000L
+            ok to "income=${parsed.isIncome} • comm=${parsed.commitmentKind} • amt=${parsed.totalAmountToman}"
+        }
+
+        // 54. Video dbatch_25 exact sentence: colloquial compound million + approximate + past-tense inflow
+        recordTest(
+            category = "موتور صوتی پیشرفته (ویدیو dbatch_25)",
+            title = "تفکیک «۵۰۰ هزار خرج تارا» و «یک و صد و خورده‌ای از صرافی آبان تتر اومد به حسابم»",
+            inputSummary = "خوب من امروز ۵۰۰ هزار تومان خرج تارا کردم یک و صد و خورده‌ای هم از صرافی آبان تتر اومد به حسابم",
+            expectedSummary = "۱) تارا (۵۰۰,۰۰۰ پرداختی) • ۲) صرافی آبان تتر (+۱,۱۰۰,۰۰۰ دریافتی تقریبی)"
+        ) {
+            val phrase = "خوب من امروز ۵۰۰ هزار تومان خرج تارا کردم یک و صد و خورده‌ای هم از صرافی آبان تتر اومد به حسابم"
+            val items = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(phrase)
+            val ok = items.size == 2 &&
+                items[0].purposeCategory == "تارا" &&
+                items[0].totalAmountToman == 500_000L &&
+                !items[0].isIncome &&
+                !items[0].isApproximateAmount &&
+                items[1].purposeCategory == "صرافی آبان تتر" &&
+                items[1].totalAmountToman == 1_100_000L &&
+                items[1].isIncome &&
+                !items[1].isCommitment &&
+                items[1].isApproximateAmount
+            ok to items.joinToString(" | ") { "${it.purposeCategory}:${it.totalAmountToman}:inc=${it.isIncome}:approx=${it.isApproximateAmount}" }
+        }
+
+        // 55. General colloquial compound million shorthand ("دو و پونصد", "یک و دویست و پنجاه", "یک و نیم")
+        recordTest(
+            category = "مبالغ ترکیبی محاوره‌ای میلیون (v2.4)",
+            title = "تبدیل «دو و پونصد» به ۲.۵ میلیون و «یک و دویست و پنجاه» به ۱.۲۵ میلیون",
+            inputSummary = "دو و پونصد خرید گوشی | یک و دویست و پنجاه اجاره",
+            expectedSummary = "۲,۵۰۰,۰۰۰ (گوشی) | ۱,۲۵۰,۰۰۰ (اجاره)"
+        ) {
+            val p1 = PersianVoiceSlangParserEngine.parseVoiceCommand("دو و پونصد خرید گوشی")
+            val p2 = PersianVoiceSlangParserEngine.parseVoiceCommand("یک و دویست و پنجاه اجاره")
+            val ok = p1.totalAmountToman == 2_500_000L && p1.purposeCategory == "گوشی" &&
+                p2.totalAmountToman == 1_250_000L && p2.purposeCategory == "اجاره"
+            ok to "${p1.purposeCategory}=${p1.totalAmountToman} | ${p2.purposeCategory}=${p2.totalAmountToman}"
+        }
+
+        // 56. Explicit Jalali date extraction ("۲۸ آبان ۵۰۰ تومن خرج تارا کردم") without false match on "صرافی آبان تتر"
+        recordTest(
+            category = "تاریخ صریح شمسی در ویس (v2.4)",
+            title = "استخراج تاریخ «۲۸ آبان» بدون تداخل با نام «صرافی آبان تتر»",
+            inputSummary = "۲۸ آبان ۵۰۰ تومن خرج تارا کردم",
+            expectedSummary = "تارا • ۵۰۰,۰۰۰ • تاریخ صریح «۲۸ آبان ...»"
+        ) {
+            val parsed = PersianVoiceSlangParserEngine.parseVoiceCommand("۲۸ آبان ۵۰۰ تومن خرج تارا کردم")
+            val exchangeOnly = PersianVoiceSlangParserEngine.parseVoiceCommand("۵۰۰ تومن از صرافی آبان تتر اومد به حسابم")
+            val ok = parsed.purposeCategory == "تارا" &&
+                parsed.totalAmountToman == 500_000L &&
+                parsed.explicitJalaliDate.startsWith("۲۸ آبان ") &&
+                exchangeOnly.explicitJalaliDate.isBlank()
+            ok to "عنوان=${parsed.purposeCategory} • تاریخ=${parsed.explicitJalaliDate} • صرافی‌تر=${exchangeOnly.explicitJalaliDate.ifBlank { "خالی" }}"
+        }
+
+        // 57. Jalali date string round-trip conversion to epoch timestamp
+        recordTest(
+            category = "تبدیل معکوس تاریخ شمسی (v2.4)",
+            title = "تبدیل دقیق «۲۸ آبان ۱۴۰۵» به Timestamp و بازگشت بدون خطای روز",
+            inputSummary = "۲۸ آبان ۱۴۰۵",
+            expectedSummary = "۲۸ آبان ۱۴۰۵"
+        ) {
+            val ts = JalaliCalendarUtils.jalaliDateStringToTimestampMillis("۲۸ آبان ۱۴۰۵")
+            val roundTrip = ts?.let { JalaliCalendarUtils.timestampToJalali(it).dateWithYear }.orEmpty()
+            val ok = roundTrip == "۲۸ آبان ۱۴۰۵"
+            ok to roundTrip.ifBlank { "null" }
+        }
+
+        // 58. Smart 36-hour cross-midnight SMS matching (03:24 AM referring to 28 Aban 19:54 SMS as "امروز")
+        recordTest(
+            category = "تطبیق هوشمند نیمه‌شب ۳۶ ساعته (v2.4)",
+            title = "تطبیق ویس ساعت ۳:۲۴ بامداد (۲۹ آبان) با پیامک ۵۰۰ هزار بلو ساعت ۱۹:۵۴ (۲۸ آبان)",
+            inputSummary = "ساعت ۳:۲۴ بامداد ۲۹ آبان • پیامک بلو ۵۰۰,۰۰۰ در ۲۸ آبان ۱۹:۵۴",
+            expectedSummary = "اتصال خودکار دقیق به پیامک بلو (id=501)"
+        ) {
+            val (gy29, gm29, gd29) = JalaliCalendarUtils.jalaliToGregorian(1405, 8, 29)
+            val now324Am = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Tehran")).apply {
+                set(gy29, gm29 - 1, gd29, 3, 24, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }.timeInMillis
+            val sms1954Ms = now324Am - (7L * 3_600_000L + 30L * 60_000L) // 28 Aban 19:54
+            val smsDate = JalaliCalendarUtils.timestampToJalali(sms1954Ms).dateWithYear
+
+            val parsed = PersianVoiceSlangParserEngine.parseVoiceCommand("امروز ۵۰۰ هزار تومان خرج تارا کردم")
+            val matches = OrosiVoiceSmsMatcher.matchBatch(
+                items = listOf(parsed),
+                untaggedBankSms = listOf(
+                    UntaggedSmsCandidate(501L, "بلو", 500_000L, false, sms1954Ms, smsDate, "۱۹:۵۴", "کارت بلو")
+                ),
+                nowMillis = now324Am
+            )
+            val m = matches.firstOrNull()
+            val ok = m?.matchedCandidate?.id == 501L && m.isExactAutoMatch
+            ok to "matchedId=${m?.matchedCandidate?.id} • exact=${m?.isExactAutoMatch}"
+        }
+
+        // 59. Approximate amount auto-matching ("یک و صد و خورده‌ای" -> 1,161,741 Blu SMS)
+        recordTest(
+            category = "تطبیق خودکار مبالغ تقریبی (v2.4)",
+            title = "اتصال خودکار «یک و صد و خورده‌ای از آبان تتر» به پیامک دقیق ۱,۱۶۱,۷۴۱ بلو",
+            inputSummary = "یک و صد و خورده‌ای از صرافی آبان تتر اومد به حسابم • پیامک بلو +۱,۱۶۱,۷۴۱",
+            expectedSummary = "اتصال تقریبی (id=502 • حفظ مبلغ دقیق ۱,۱۶۱,۷۴۱)"
+        ) {
+            val (gy29, gm29, gd29) = JalaliCalendarUtils.jalaliToGregorian(1405, 8, 29)
+            val now324Am = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Tehran")).apply {
+                set(gy29, gm29 - 1, gd29, 3, 24, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }.timeInMillis
+            val sms1327Ms = now324Am - (14L * 3_600_000L)
+            val smsDate = JalaliCalendarUtils.timestampToJalali(sms1327Ms).dateWithYear
+
+            val items = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(
+                "خوب من امروز ۵۰۰ هزار تومان خرج تارا کردم یک و صد و خورده‌ای هم از صرافی آبان تتر اومد به حسابم"
+            )
+            val matches = OrosiVoiceSmsMatcher.matchBatch(
+                items = items,
+                untaggedBankSms = listOf(
+                    UntaggedSmsCandidate(501L, "بلو", 500_000L, false, now324Am - 7L * 3_600_000L, smsDate, "۱۹:۵۴", "کارت بلو"),
+                    UntaggedSmsCandidate(502L, "بلو", 1_161_741L, true, sms1327Ms, smsDate, "۱۳:۲۷", "کارت بلو")
+                ),
+                nowMillis = now324Am
+            )
+            val ok = matches.size == 2 &&
+                matches[0].matchedCandidate?.id == 501L && matches[0].isExactAutoMatch &&
+                matches[1].matchedCandidate?.id == 502L && matches[1].isApproximateAutoMatch &&
+                matches[1].matchedCandidate?.amountToman == 1_161_741L
+            ok to "m0=${matches.getOrNull(0)?.matchedCandidate?.id}(exact=${matches.getOrNull(0)?.isExactAutoMatch}) | m1=${matches.getOrNull(1)?.matchedCandidate?.id}(approx=${matches.getOrNull(1)?.isApproximateAutoMatch}, amt=${matches.getOrNull(1)?.matchedCandidate?.amountToman})"
+        }
+
+        // 60. BiDi LTR Isolation on scale toggle math operators (×۱۰۰۰ / ÷۱۰۰۰) and isolated amount runs
+        recordTest(
+            category = "استاندارد دوجهته فارسی BiDi (v2.3)",
+            title = "ایزوله‌سازی چپ‌به‌راست علامت × و ÷ کنار ۱۰۰۰ و علامت + درآمد",
+            inputSummary = "formatScaleToggleLabel(true/false) + formatIsolatedAmountRun(500000, true)",
+            expectedSummary = "×۱۰۰۰ و ÷۱۰۰۰ و +۵۰۰,۰۰۰ با ایزوله LTR (\\u2066\\u200E...\\u2069)"
+        ) {
+            val toMillion = PersianNumberUtils.formatScaleToggleLabel(isThousandScale = true)
+            val toThousand = PersianNumberUtils.formatScaleToggleLabel(isThousandScale = false)
+            val incRun = PersianNumberUtils.formatIsolatedAmountRun(500_000L, isIncome = true)
+            val ok = toMillion == "تغییر واحد به میلیون (\u2066\u200E×۱۰۰۰\u2069)" &&
+                toThousand == "تغییر واحد به هزار (\u2066\u200E÷۱۰۰۰\u2069)" &&
+                incRun == "\u2066\u200E+۵۰۰,۰۰۰\u2069"
+            ok to "$toMillion | $incRun"
         }
 
         val totalMs = ((System.nanoTime() - suiteStartNanos) / 1_000_000L).coerceAtLeast(1L)

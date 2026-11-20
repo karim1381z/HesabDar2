@@ -66,7 +66,9 @@ data class VoiceUiState(
     val singleAutoMatch: VoiceSmsMatchResult? = null,
     val singleMatchedBankTxId: Long? = null,
     val multiAutoMatches: List<VoiceSmsMatchResult> = emptyList(),
-    val multiMatchedBankTxIds: List<Long?> = emptyList()
+    val multiMatchedBankTxIds: List<Long?> = emptyList(),
+    val isApproximateAmount: Boolean = false,
+    val explicitJalaliDate: String = ""
 )
 
 data class OrosiUiState(
@@ -614,7 +616,9 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
         amountToman: Long,
         isIncome: Boolean,
         commitmentKind: String?,
-        eventDayOffset: Int
+        eventDayOffset: Int,
+        isApproximateAmount: Boolean = false,
+        explicitJalaliDate: String = ""
     ): VoiceSmsMatchResult? {
         if (commitmentKind != null || amountToman <= 0L) return null
         val probe = ParsedVoiceExpense(
@@ -628,7 +632,9 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             cardLabel = "",
             isIncome = isIncome,
             commitmentKind = null,
-            eventDayOffset = eventDayOffset
+            eventDayOffset = eventDayOffset,
+            isApproximateAmount = isApproximateAmount,
+            explicitJalaliDate = explicitJalaliDate
         )
         return OrosiVoiceSmsMatcher.matchBatch(
             items = listOf(probe),
@@ -673,13 +679,16 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             amountToman = numericVal,
             isIncome = cur.isIncome,
             commitmentKind = cur.commitmentKind,
-            eventDayOffset = cur.eventDayOffset
+            eventDayOffset = cur.eventDayOffset,
+            isApproximateAmount = false,
+            explicitJalaliDate = cur.explicitJalaliDate
         )
         _voiceState.value = cur.copy(
             manualAmountText = formattedPersian,
             totalAmountToman = numericVal,
             dongAmountToman = safeDong,
             userShareToman = userShare,
+            isApproximateAmount = false,
             singleAutoMatch = matchRes,
             singleMatchedBankTxId = matchRes?.matchedCandidate?.id
         )
@@ -701,7 +710,14 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
         }
         val updatedSingleKind = current.commitmentKind?.let { if (isIncome) "RECEIVABLE" else "DEBT" }
         val singleMatch = if (current.targetUntaggedTransaction == null && updatedMulti.isEmpty()) {
-            computeSingleMatch(current.totalAmountToman, isIncome, updatedSingleKind, current.eventDayOffset)
+            computeSingleMatch(
+                amountToman = current.totalAmountToman,
+                isIncome = isIncome,
+                commitmentKind = updatedSingleKind,
+                eventDayOffset = current.eventDayOffset,
+                isApproximateAmount = current.isApproximateAmount,
+                explicitJalaliDate = current.explicitJalaliDate
+            )
         } else null
         val multiMatches = if (current.targetUntaggedTransaction == null && updatedMulti.size > 1) {
             OrosiVoiceSmsMatcher.matchBatch(updatedMulti, collectUntaggedBankSmsCandidates())
@@ -777,10 +793,12 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
         if (index !in currentList.indices) return
         val existingItem = currentList[index]
         val parsedAmount = PersianNumberUtils.parseAmountInputToLong(newAmountStr) ?: 0L
+        val amountChanged = parsedAmount != existingItem.totalAmountToman
         currentList[index] = existingItem.copy(
             purposeCategory = newTitle,
             totalAmountToman = parsedAmount,
-            userShareToman = parsedAmount
+            userShareToman = parsedAmount,
+            isApproximateAmount = if (amountChanged) false else existingItem.isApproximateAmount
         )
         val targetTx = _voiceState.value.targetUntaggedTransaction
         val combinedNote = PersianVoiceSlangParserEngine.formatCombinedMultiVoiceNote(currentList)
@@ -906,6 +924,8 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
 
         val resolvedSingleCommitmentKind = if (targetTx == null && effectiveMultiItems.isEmpty()) parsed.commitmentKind else null
         val resolvedSingleDayOffset = if (targetTx == null && effectiveMultiItems.isEmpty()) parsed.eventDayOffset else 0
+        val resolvedSingleExplicitDate = if (targetTx == null && effectiveMultiItems.isEmpty()) parsed.explicitJalaliDate else ""
+        val resolvedSingleApprox = targetTx == null && effectiveMultiItems.isEmpty() && parsed.isApproximateAmount
 
         val candidates = if (targetTx == null) collectUntaggedBankSmsCandidates() else emptyList()
         val multiMatches = if (targetTx == null && effectiveMultiItems.size > 1) {
@@ -914,7 +934,14 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             emptyList()
         }
         val singleMatch = if (targetTx == null && effectiveMultiItems.isEmpty()) {
-            computeSingleMatch(effectiveTotal, resolvedIsIncome, resolvedSingleCommitmentKind, resolvedSingleDayOffset)
+            computeSingleMatch(
+                amountToman = effectiveTotal,
+                isIncome = resolvedIsIncome,
+                commitmentKind = resolvedSingleCommitmentKind,
+                eventDayOffset = resolvedSingleDayOffset,
+                isApproximateAmount = resolvedSingleApprox,
+                explicitJalaliDate = resolvedSingleExplicitDate
+            )
         } else {
             null
         }
@@ -944,7 +971,9 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             singleAutoMatch = singleMatch,
             singleMatchedBankTxId = singleMatch?.matchedCandidate?.id,
             multiAutoMatches = multiMatches,
-            multiMatchedBankTxIds = multiMatches.map { it.matchedCandidate?.id }
+            multiMatchedBankTxIds = multiMatches.map { it.matchedCandidate?.id },
+            isApproximateAmount = resolvedSingleApprox,
+            explicitJalaliDate = resolvedSingleExplicitDate
         )
     }
 
@@ -1091,7 +1120,13 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
                 commitmentKind = effectiveCommitmentKind,
                 dueDateHint = effectiveDueDateHint,
                 eventDayOffset = if (targetTx == null) (v.eventDayOffset.takeIf { it != 0 } ?: parsedFromSpeech.eventDayOffset) else 0,
-                commitmentSubLabel = if (effectiveCommitmentKind != null) v.commitmentSubLabel.ifBlank { parsedFromSpeech.commitmentSubLabel } else ""
+                commitmentSubLabel = if (effectiveCommitmentKind != null) v.commitmentSubLabel.ifBlank { parsedFromSpeech.commitmentSubLabel } else "",
+                isApproximateAmount = v.isApproximateAmount,
+                explicitJalaliDate = if (targetTx == null && effectiveCommitmentKind == null) {
+                    v.explicitJalaliDate.ifBlank { parsedFromSpeech.explicitJalaliDate }
+                } else {
+                    ""
+                }
             )
 
             val effectiveTargetBankTxId = targetTx?.id

@@ -12,10 +12,23 @@
 #   public *;
 #}
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# Preserve line numbers for readable crash diagnostics
+-keepattributes SourceFile,LineNumberTable
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Keep Android entry points & BroadcastReceivers
+-keep public class com.example.MainActivity { *; }
+-keep public class com.example.data.sms.BankSmsBroadcastReceiver { *; }
+
+# Keep Room Database, DAOs, Entities, and KSP-generated *_Impl classes
+-keep class * extends androidx.room.RoomDatabase
+-keep @androidx.room.Entity class * { *; }
+-keep @androidx.room.Dao class * { *; }
+-keep class com.example.data.local.** { *; }
+-dontwarn androidx.room.paging.**
+
+# Keep Kotlin Metadata & Coroutines
+-keep class kotlin.Metadata { *; }
+-keepclassmembers class kotlinx.coroutines.** {
+    volatile <fields>;
+}
+

@@ -341,7 +341,7 @@ fun DashboardScreen(
                                 hideAmounts = settings.hideAmounts,
                                 showTankhahBadge = settings.tankhahModeEnabled,
                                 onCardClick = onOpenAccountsTab,
-                                onToggleTankhah = { onToggleAccountTankhah(account.bankName) }
+                                onToggleAccountTankhah = onToggleAccountTankhah
                             )
                         }
                     }
@@ -933,32 +933,6 @@ private fun JibemanFinancialStatusHeroCard(
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Calm, unmistakable affordance cue signaling that tapping the Hero card opens the Monthly Balance Sheet
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(DashPillShape12)
-                    .background(Color.White.copy(alpha = 0.08f))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "مشاهده ترازنامه ماه حقوقی",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = AlabasterSilk.copy(alpha = 0.92f)
-                )
-                Icon(
-                    imageVector = Icons.Default.ChevronLeft,
-                    contentDescription = null,
-                    tint = NishapurTurquoiseSoft,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
     }
 }
 
@@ -1105,7 +1079,7 @@ private fun BankAccountCarouselCard(
     hideAmounts: Boolean,
     showTankhahBadge: Boolean,
     onCardClick: () -> Unit,
-    onToggleTankhah: () -> Unit
+    onToggleAccountTankhah: (String) -> Unit
 ) {
     val cardBg = if (showTankhahBadge && account.isTankhah) DashTankhahCardBg else OrosiSurfaceHigh
     val formattedBalance = remember(account.balanceToman) {
@@ -1153,7 +1127,7 @@ private fun BankAccountCarouselCard(
                     modifier = Modifier
                         .clip(DashPillShape50)
                         .background(if (account.isTankhah) NishapurTurquoiseDeep else OrosiSurfaceContainer)
-                        .clickable(onClick = onToggleTankhah)
+                        .clickable { onToggleAccountTankhah(account.bankName) }
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                         .testTag("carousel_tankhah_badge_${account.bankName}")
                 ) {

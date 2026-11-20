@@ -1610,7 +1610,9 @@ class OrosiFinanceRepository(
                 }
             }
 
-            val effectiveTimestamp = baseNow + item.eventDayOffset * 86_400_000L + index
+            val explicitTs = item.explicitJalaliDate.takeIf { it.isNotBlank() }
+                ?.let { JalaliCalendarUtils.jalaliDateStringToTimestampMillis(it, baseNow) }
+            val effectiveTimestamp = (explicitTs ?: (baseNow + item.eventDayOffset * 86_400_000L)) + index
             val effectiveJalali = JalaliCalendarUtils.timestampToJalali(effectiveTimestamp)
             val resolvedStore = item.merchant.trim()
                 .ifBlank { item.storeName.trim() }
@@ -1661,7 +1663,9 @@ class OrosiFinanceRepository(
         targetUntaggedTransactionId: Long? = null
     ) {
         val now = System.currentTimeMillis()
-        val effectiveTimestamp = now + parsedVoice.eventDayOffset * 86_400_000L
+        val explicitTs = parsedVoice.explicitJalaliDate.takeIf { it.isNotBlank() }
+            ?.let { JalaliCalendarUtils.jalaliDateStringToTimestampMillis(it, now) }
+        val effectiveTimestamp = explicitTs ?: (now + parsedVoice.eventDayOffset * 86_400_000L)
         val effectiveJalali = JalaliCalendarUtils.timestampToJalali(effectiveTimestamp)
 
         val cleanPurpose = parsedVoice.purposeCategory.trim()
