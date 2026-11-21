@@ -30,7 +30,7 @@ data class RegressionSuiteReport(
  */
 object OrosiRegressionSuite {
 
-    const val EXPECTED_TOTAL_CASES = 66
+    const val EXPECTED_TOTAL_CASES = 72
 
     fun runFullRegressionAndStressSuite(): RegressionSuiteReport {
         val suiteStartNanos = System.nanoTime()
@@ -1263,6 +1263,129 @@ object OrosiRegressionSuite {
                 items[0].totalAmountToman == 2_000_000L &&
                 items[1].totalAmountToman == 500_000L
             ok to items.joinToString(" | ") { "${it.purposeCategory}:${it.totalAmountToman}:due=${it.dueDateHint}" }
+        }
+
+        // 67. Video fbatch (01:28): "سلام من الان مقداری موجودی دارم ولی باید سر ماه ۲۴ تومان قسط بدم"
+        recordTest(
+            category = "تعهد صوتی قسط و وام (v2.6)",
+            title = "حذف مقدمه «مقداری موجودی دارم ولی» + تشخیص قسط ۲۴ میلیونی سر ماه (ویدیو fbatch)",
+            inputSummary = "سلام من الان مقداری موجودی دارم ولی باید سر ماه ۲۴ تومان قسط بدم",
+            expectedSummary = "تعهد DEBT/LOAN_INSTALLMENT • عنوان «قسط» • ۲۴,۰۰۰,۰۰۰ تومان • سررسید «سر ماه»"
+        ) {
+            val parsed = PersianVoiceSlangParserEngine.parseVoiceCommand(
+                "سلام من الان مقداری موجودی دارم ولی باید سر ماه ۲۴ تومان قسط بدم"
+            )
+            val ok = parsed.commitmentKind == "DEBT" &&
+                parsed.commitmentCategory == "LOAN_INSTALLMENT" &&
+                parsed.totalAmountToman == 24_000_000L &&
+                parsed.dueDateHint == "سر ماه" &&
+                parsed.purposeCategory == "قسط"
+            ok to "${parsed.purposeCategory} • ${parsed.totalAmountToman} • ${parsed.commitmentKind}/${parsed.commitmentCategory} • due=${parsed.dueDateHint}"
+        }
+
+        // 68. Video fbatch_31 (00:35): "خوب من یه چند روز پیش ۵۰۰ هزار تومن دادم به تارا"
+        recordTest(
+            category = "پاکسازی زمان تقریبی گذشته (v2.6)",
+            title = "پاکسازی «یه چند روز پیش» بدون تبدیل به «۱ چند روز پیش» (ویدیو fbatch_31)",
+            inputSummary = "خوب من یه چند روز پیش ۵۰۰ هزار تومن دادم به تارا",
+            expectedSummary = "عنوان «تارا» • ۵۰۰,۰۰۰ تومان • isVagueRecentPast=true"
+        ) {
+            val parsed = PersianVoiceSlangParserEngine.parseVoiceCommand(
+                "خوب من یه چند روز پیش ۵۰۰ هزار تومن دادم به تارا"
+            )
+            val ok = parsed.purposeCategory == "تارا" &&
+                parsed.totalAmountToman == 500_000L &&
+                !parsed.isIncome &&
+                !parsed.isCommitment &&
+                parsed.isVagueRecentPast
+            ok to "${parsed.purposeCategory} • ${parsed.totalAmountToman} • vaguePast=${parsed.isVagueRecentPast}"
+        }
+
+        // 69. Video fbatch_31 7-day rolling SMS matcher for vague recent past ("یه چند روز پیش")
+        recordTest(
+            category = "تطبیق ۷ روزه پیامک برای گذشته نزدیک (v2.6)",
+            title = "اتصال خودکار «یه چند روز پیش ۵۰۰ هزار تومن دادم به تارا» به پیامک ۵۰۰ هزار بلو از ۲ روز قبل",
+            inputSummary = "صدای کاربر در ۳۰ آبان vs پیامک ۵۰۰,۰۰۰ بلو در ۲۸ آبان (۵۱ ساعت قبل)",
+            expectedSummary = "اتصال دقیق خودکار به پیامک بلو (id=950)"
+        ) {
+            val nowTs = JalaliCalendarUtils.jalaliDayStartMillis(1405, 8, 30) + 22L * 3_600_000L
+            val smsTs = nowTs - 51L * 3_600_000L
+            val smsJalali = JalaliCalendarUtils.timestampToJalali(smsTs)
+            val parsed = PersianVoiceSlangParserEngine.parseVoiceCommand(
+                "خوب من یه چند روز پیش ۵۰۰ هزار تومن دادم به تارا"
+            )
+            val candidates = listOf(
+                UntaggedSmsCandidate(
+                    id = 950L,
+                    bankName = "بلو",
+                    amountToman = 500_000L,
+                    isIncome = false,
+                    timestamp = smsTs,
+                    jalaliDate = smsJalali.dateWithYear,
+                    timeStr = smsJalali.timeStr,
+                    cardInfo = "کارت بلو"
+                )
+            )
+            val match = OrosiVoiceSmsMatcher.matchBatch(listOf(parsed), candidates, nowTs).first()
+            val ok = match.isExactAutoMatch && match.matchedCandidate?.id == 950L
+            ok to "exact=${match.isExactAutoMatch} • matched=${match.matchedCandidate?.id}"
+        }
+
+        // 70. Generalized spaced Sayyad check obligation + Jalali "سر ماه" / "آخر ماه" date resolution
+        recordTest(
+            category = "تعهد چک و سررسید جلالی (v2.6)",
+            title = "تشخیص «باید آخر ماه ۱۰ تومن چک بدم» (SAYYAD_ISSUED) و تبدیل «سر ماه» به اول ماه بعد",
+            inputSummary = "باید آخر ماه ۱۰ تومن چک بدم + resolveRelativeJalaliDate(سر ماه، ۳۰ آبان ۱۴۰۵)",
+            expectedSummary = "DEBT/SAYYAD_ISSUED • ۱۰,۰۰۰,۰۰۰ • ۱ آذر ۱۴۰۵"
+        ) {
+            val parsed = PersianVoiceSlangParserEngine.parseVoiceCommand("باید آخر ماه ۱۰ تومن چک بدم")
+            val aban30Ts = JalaliCalendarUtils.jalaliDayStartMillis(1405, 8, 30) + 12L * 3_600_000L
+            val nextMonthFirst = JalaliCalendarUtils.resolveRelativeJalaliDate("سر ماه", aban30Ts)
+            val endOfMonth = JalaliCalendarUtils.resolveRelativeJalaliDate("آخر ماه", aban30Ts)
+            val ok = parsed.commitmentKind == "DEBT" &&
+                parsed.commitmentCategory == "SAYYAD_ISSUED" &&
+                parsed.totalAmountToman == 10_000_000L &&
+                parsed.dueDateHint == "آخر ماه" &&
+                nextMonthFirst == "۱ آذر ۱۴۰۵" &&
+                endOfMonth == "۳۰ آبان ۱۴۰۵"
+            ok to "${parsed.purposeCategory}:${parsed.totalAmountToman}:${parsed.commitmentCategory} | سرماه=$nextMonthFirst | آخرماه=$endOfMonth"
+        }
+
+        // 71. Generalized vague recent past phrasing ("اخیراً ۱۵۰ تومن دادم نانوایی")
+        recordTest(
+            category = "پاکسازی زمان تقریبی گذشته (v2.6)",
+            title = "پاکسازی عمومی «اخیراً ۱۵۰ تومن دادم نانوایی» و فعال‌سازی بازه ۷ روزه",
+            inputSummary = "اخیراً ۱۵۰ تومن دادم نانوایی",
+            expectedSummary = "عنوان «نانوایی» • ۱۵۰,۰۰۰ تومان • isVagueRecentPast=true"
+        ) {
+            val parsed = PersianVoiceSlangParserEngine.parseVoiceCommand("اخیراً ۱۵۰ تومن دادم نانوایی")
+            val ok = parsed.purposeCategory == "نانوایی" &&
+                parsed.totalAmountToman == 150_000L &&
+                parsed.isVagueRecentPast
+            ok to "${parsed.purposeCategory} • ${parsed.totalAmountToman} • vaguePast=${parsed.isVagueRecentPast}"
+        }
+
+        // 72. Pure cashflow net balance invariant (unpaid installments/checks do NOT inflate monthly cashflow deficit)
+        recordTest(
+            category = "تراز خالص مستقل از قسط پیش‌رو (v2.6)",
+            title = "محاسبه تراز خالص ماه فقط از ورودی منهای خرج واقعی (جدا از ۲۴ میلیون قسط پیش‌رو)",
+            inputSummary = "ورودی ۴۲.۹م، خرج ۴۴.۰م، قسط پیش‌رو ۲۴.۰م",
+            expectedSummary = "تراز خالص = کسری ۱.۱م (و نه ۲۵.۱م) با حفظ ۲۴م در فیلد قسط"
+        ) {
+            val nowTs = JalaliCalendarUtils.jalaliDayStartMillis(1405, 8, 25) + 12L * 3_600_000L
+            val summary = OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle(
+                transactions = listOf(
+                    CashflowTxSnapshot(1L, "INCOME", 42_900_000L, 42_900_000L, "بلو", nowTs - 3_600_000L),
+                    CashflowTxSnapshot(2L, "EXPENSE", 44_000_000L, 44_000_000L, "بلو", nowTs - 1_800_000L)
+                ),
+                paydayStartDay = 1,
+                reservedCommitmentsToman = 24_000_000L,
+                nowMillis = nowTs
+            )
+            val ok = summary.netBalanceToman == -1_100_000L &&
+                summary.reservedCommitmentsToman == 24_000_000L &&
+                summary.healthStatus == CashflowHealthStatus.DEFICIT
+            ok to "net=${summary.netBalanceToman} • reserved=${summary.reservedCommitmentsToman} • status=${summary.healthStatus}"
         }
 
         val totalMs = ((System.nanoTime() - suiteStartNanos) / 1_000_000L).coerceAtLeast(1L)

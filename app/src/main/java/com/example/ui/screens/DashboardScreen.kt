@@ -108,7 +108,6 @@ private val DashCardShape20 = RoundedCornerShape(20.dp)
 private val DashCardShape18 = RoundedCornerShape(18.dp)
 private val DashPillShape12 = RoundedCornerShape(12.dp)
 private val DashPillShape50 = RoundedCornerShape(50)
-private val DashUntaggedRowBg = Color(0xFF102432)
 private val DashTankhahCardBg = Color(0xFF112936)
 private val DashDeleteOverlayBg = OrosiSurfaceHigh.copy(alpha = 0.96f)
 private val DashExpenseTagBg = RubyRose.copy(alpha = 0.22f)
@@ -224,9 +223,11 @@ fun DashboardScreen(
     val onRowLongClickForId = remember { { id: Long -> activeDeleteConfirmId = id } }
     val onClearDeleteConfirm = remember { { _: Long -> activeDeleteConfirmId = null } }
 
-    // Gate initial skeleton shimmer on hasLoadedFromDb so cold starts with cached Room data NEVER flash shimmer
+    // Gate initial skeleton shimmer & sync banner on hasLoadedFromDb so cold starts with cached Room data
+    // NEVER flash "۰ تومان" or "در حال بازخوانی پیامک‌های بانکی..." before Room emits its first snapshot.
     val isInitialSkeletonLoading = hasLoadedFromDb && isSyncingSms && bankAccounts.isEmpty() && visibleTransactions.isEmpty()
-    val shimmerBrush = if (isInitialSkeletonLoading) orosiShimmerBrush() else null
+    val showHeroPlaceholderShimmer = !hasLoadedFromDb || isInitialSkeletonLoading
+    val shimmerBrush = if (showHeroPlaceholderShimmer) orosiShimmerBrush() else null
 
     LazyColumn(
         modifier = modifier
@@ -235,7 +236,7 @@ fun DashboardScreen(
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        if (isSyncingSms && !isInitialSkeletonLoading) {
+        if (hasLoadedFromDb && isSyncingSms && !isInitialSkeletonLoading) {
             item(key = "sms_sync_banner", contentType = "sync_banner") {
                 Row(
                     modifier = Modifier
@@ -272,8 +273,8 @@ fun DashboardScreen(
                 hideAmounts = settings.hideAmounts,
                 tankhahModeEnabled = settings.tankhahModeEnabled,
                 onlyTankhahMode = settings.onlyTankhahMode,
-                isSyncingSms = isSyncingSms,
-                showInitialShimmer = isInitialSkeletonLoading,
+                isSyncingSms = hasLoadedFromDb && isSyncingSms,
+                showInitialShimmer = showHeroPlaceholderShimmer,
                 shimmerBrush = shimmerBrush,
                 onToggleHideAmounts = onToggleHideAmounts,
                 onSetOnlyTankhahMode = onSetOnlyTankhahMode,
@@ -1190,12 +1191,11 @@ private fun CalmTransactionCardFast(
     onUntaggedMicClick: (TransactionEntity) -> Unit
 ) {
     val tx = row.transaction
-    val cardBg = if (tx.isUntagged) DashUntaggedRowBg else OrosiSurfaceContainer
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(cardBg, DashCardShape20)
+            .background(OrosiSurfaceContainer, DashCardShape20)
             .combinedClickable(
                 onClick = { onTransactionClick(tx) },
                 onLongClick = if (onRowLongClickId != null) { { onRowLongClickId(tx.id) } } else null

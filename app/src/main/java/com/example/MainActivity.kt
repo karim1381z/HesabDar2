@@ -511,6 +511,18 @@ fun OrosiFinanceApp(
             onSetMultiItemMatchedBankTx = { idx, txId ->
                 viewModel.onSetMultiItemMatchedBankTx(idx, txId)
             },
+            onToggleSingleDestination = {
+                viewModel.onToggleSingleVoiceDestination()
+            },
+            onSetSingleCommitmentCategory = { cat ->
+                viewModel.onSetSingleVoiceCommitmentCategory(cat)
+            },
+            onToggleMultiItemDestination = { idx ->
+                viewModel.onToggleMultiVoiceItemDestination(idx)
+            },
+            onSetMultiItemCommitmentCategory = { idx, cat ->
+                viewModel.onSetMultiVoiceItemCommitmentCategory(idx, cat)
+            },
             onSimulateVoiceRecord = { viewModel.triggerVoiceSimulation(null) },
             onConfirmVoiceEntry = { viewModel.confirmVoiceEntry() },
             onDismiss = { viewModel.dismissVoiceOverlay() }

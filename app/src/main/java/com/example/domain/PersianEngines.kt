@@ -506,7 +506,7 @@ object JalaliCalendarUtils {
         val label: String
     )
 
-    private fun jalaliDayStartMillis(jy: Int, jm: Int, jd: Int): Long {
+    fun jalaliDayStartMillis(jy: Int, jm: Int, jd: Int): Long {
         val safeMonth = jm.coerceIn(1, 12)
         val safeDay = jd.coerceIn(1, daysInJalaliMonth(jy, safeMonth))
         val (gy, gm, gd) = jalaliToGregorian(jy, safeMonth, safeDay)
@@ -593,14 +593,28 @@ object JalaliCalendarUtils {
         nowMillis: Long = System.currentTimeMillis()
     ): String {
         val norm = PersianNumberUtils.normalizePersianText(hint.trim())
-        val offsetDays = when {
-            norm.contains("پس‌فردا") || norm.contains("پس فردا") -> 2L
-            norm.contains("فردا") -> 1L
-            norm.contains("هفته بعد") || norm.contains("هفته آینده") || norm.contains("هفته دیگر") -> 7L
-            norm.contains("ماه بعد") || norm.contains("ماه آینده") || norm.contains("ماه دیگر") -> 30L
-            else -> 0L
+        val nowJ = fromTimestamp(nowMillis)
+        return when {
+            norm.contains("سر ماه") || norm.contains("اول ماه") -> {
+                val nextYm = shiftJalaliYearMonth(nowJ.yearMonthKey, 1)
+                val nextYear = nextYm / 100
+                val nextMonth = nextYm % 100
+                fromTimestamp(jalaliDayStartMillis(nextYear, nextMonth, 1)).dateWithYear
+            }
+            norm.contains("آخر ماه") -> {
+                val lastDay = daysInJalaliMonth(nowJ.year, nowJ.month)
+                fromTimestamp(jalaliDayStartMillis(nowJ.year, nowJ.month, lastDay)).dateWithYear
+            }
+            norm.contains("پس‌فردا") || norm.contains("پس فردا") ->
+                fromTimestamp(nowMillis + 2L * 86_400_000L).dateWithYear
+            norm.contains("فردا") ->
+                fromTimestamp(nowMillis + 1L * 86_400_000L).dateWithYear
+            norm.contains("هفته بعد") || norm.contains("هفته آینده") || norm.contains("هفته دیگر") ->
+                fromTimestamp(nowMillis + 7L * 86_400_000L).dateWithYear
+            norm.contains("ماه بعد") || norm.contains("ماه آینده") || norm.contains("ماه دیگر") ->
+                fromTimestamp(nowMillis + 30L * 86_400_000L).dateWithYear
+            else -> fromTimestamp(nowMillis).dateWithYear
         }
-        return fromTimestamp(nowMillis + offsetDays * 86_400_000L).dateWithYear
     }
 }
 
@@ -730,7 +744,9 @@ object OrosiCashflowAnalyzer {
             .sumOf { it.userShareToman.takeIf { v -> v > 0L } ?: it.totalAmountToman }
 
         val safeReserved = reservedCommitmentsToman.coerceAtLeast(0L)
-        val netBalance = totalIncome - totalExpense - safeReserved
+        // Net monthly cashflow reflects actual inflows minus actual outflows; future unpaid commitments
+        // (installments & checks) are reported separately so they never inflate the realized monthly deficit.
+        val netBalance = totalIncome - totalExpense
         val healthStatus = when {
             netBalance > 0L -> CashflowHealthStatus.POSITIVE
             netBalance == 0L -> CashflowHealthStatus.BALANCED
@@ -1482,7 +1498,9 @@ data class ParsedVoiceExpense(
     val commitmentSubLabel: String = "", // e.g. "برنامه خرید", "درآمد آینده", "بدهی", "طلب"
     val matchedBankTxId: Long? = null,   // Non-null when auto-matched / user-linked to an untagged bank SMS row
     val isApproximateAmount: Boolean = false, // True for "یک و صد و خورده‌ای", "حدود ۵۰۰ تومن", etc.
-    val explicitJalaliDate: String = ""       // Canonical Jalali date e.g. "۲۸ آبان ۱۴۰۵" when spoken explicitly
+    val explicitJalaliDate: String = "",      // Canonical Jalali date e.g. "۲۸ آبان ۱۴۰۵" when spoken explicitly
+    val isVagueRecentPast: Boolean = false,   // True for "یه چند روز پیش", "اخیراً", "هفته پیش" (expands SMS match window to 7 days)
+    val commitmentCategory: String = "DONG"   // "LOAN_INSTALLMENT", "SAYYAD_ISSUED", or "DONG"
 ) {
     val title: String
         get() = purposeCategory
@@ -1542,6 +1560,7 @@ data class VoiceSmsMatchResult(
 object OrosiVoiceSmsMatcher {
     private const val DAY_MS = 86_400_000L
     private const val SMART_RECENT_WINDOW_MS = 36L * 3_600_000L
+    private const val VAGUE_RECENT_PAST_WINDOW_MS = 7L * DAY_MS
 
     fun matchBatch(
         items: List<ParsedVoiceExpense>,
@@ -1565,30 +1584,33 @@ object OrosiVoiceSmsMatcher {
                 else -> todayDate
             }
         }
-        val itemUsesSmart36hWindow = BooleanArray(items.size) { idx ->
+        val itemUsesRollingWindow = BooleanArray(items.size) { idx ->
             items[idx].explicitJalaliDate.isBlank() && items[idx].eventDayOffset == 0
         }
+        val itemRollingWindowMs = LongArray(items.size) { idx ->
+            if (items[idx].isVagueRecentPast) VAGUE_RECENT_PAST_WINDOW_MS else SMART_RECENT_WINDOW_MS
+        }
 
-        fun isWithinSmart36h(cand: UntaggedSmsCandidate): Boolean {
+        fun isWithinRollingWindow(idx: Int, cand: UntaggedSmsCandidate): Boolean {
             val age = nowMillis - cand.timestamp
-            return age in 0L..SMART_RECENT_WINDOW_MS
+            return age in 0L..itemRollingWindowMs[idx]
         }
 
         fun eligiblePoolFor(idx: Int): List<UntaggedSmsCandidate> {
             val item = items[idx]
             val targetDate = itemTargetDates[idx]
-            val useSmart36h = itemUsesSmart36hWindow[idx]
+            val useRolling = itemUsesRollingWindow[idx]
             val sameDay = sortedCandidates.filter { cand ->
                 cand.id !in claimedIds &&
                     cand.isIncome == item.isIncome &&
                     cand.jalaliDate == targetDate
             }
-            if (!useSmart36h) return sameDay
+            if (!useRolling) return sameDay
             val recentFallback = sortedCandidates.filter { cand ->
                 cand.id !in claimedIds &&
                     cand.isIncome == item.isIncome &&
                     cand.jalaliDate != targetDate &&
-                    isWithinSmart36h(cand)
+                    isWithinRollingWindow(idx, cand)
             }
             return sameDay + recentFallback
         }
@@ -1615,17 +1637,17 @@ object OrosiVoiceSmsMatcher {
             }
         }
 
-        // Pass 1B: 1-to-1 exact amount in 36h smart rolling window (for late-night default items)
+        // Pass 1B: 1-to-1 exact amount in rolling smart window (36h default, 7 days for vague recent past)
         for (i in items.indices) {
             if (results[i].matchedCandidate != null) continue
-            if (!itemUsesSmart36hWindow[i]) continue
+            if (!itemUsesRollingWindow[i]) continue
             val item = items[i]
             if (item.isCommitment || item.totalAmountToman <= 0L) continue
             val exactRecent = sortedCandidates.firstOrNull { cand ->
                 cand.id !in claimedIds &&
                     cand.isIncome == item.isIncome &&
                     cand.amountToman == item.totalAmountToman &&
-                    isWithinSmart36h(cand)
+                    isWithinRollingWindow(i, cand)
             }
             if (exactRecent != null) {
                 claimedIds.add(exactRecent.id)
@@ -1655,8 +1677,9 @@ object OrosiVoiceSmsMatcher {
                 (diff in 0L..upperExtra) || (kotlin.math.abs(diff) <= symmetricDelta)
             }
             val bestApprox = approxCandidates.minWithOrNull(
-                compareBy<UntaggedSmsCandidate> { if (it.jalaliDate == itemTargetDates[i]) 0 else 1 }
-                    .thenBy { kotlin.math.abs(it.amountToman - base) }
+                compareBy<UntaggedSmsCandidate> {
+                    if (!item.isVagueRecentPast && it.jalaliDate == itemTargetDates[i]) 0 else 1
+                }.thenBy { kotlin.math.abs(it.amountToman - base) }
             )
             if (bestApprox != null) {
                 claimedIds.add(bestApprox.id)
@@ -1678,7 +1701,7 @@ object OrosiVoiceSmsMatcher {
             val pool = eligiblePoolFor(i)
             if (pool.isEmpty()) continue
 
-            val sameDayPool = pool.filter { it.jalaliDate == targetDate }
+            val sameDayPool = if (item.isVagueRecentPast) emptyList() else pool.filter { it.jalaliDate == targetDate }
             val activePool = if (sameDayPool.isNotEmpty()) sameDayPool else pool
 
             val closest = activePool.minByOrNull { cand ->
@@ -2575,9 +2598,22 @@ object PersianVoiceSlangParserEngine {
         """(?<=^|\s)(?:حقوق|حقوقم|دستمزد|دستمزدم|عیدی|عیدیم|پاداش|پاداشم|درآمد|درآمدم|اجاره|رهن|ودیعه|پیش‌پرداخت|پیش\s+پرداخت|ماشین|خودرو|خونه|خانه|آپارتمان|ملک|زمین|لپ‌تاپ|لپ\s+تاپ|آیفون|دوچرخه|موتور|موتورسیکلت|گوشی|موبایل|تبلت|تلویزیون|یخچال|لباسشویی|کامپیوتر|پلی‌استیشن|مبل|مبلمان|فرش|قسط‌های\s+بزرگ|قسط\s+بزرگ|قسط‌های\s+بزرگی|قسط\s+بزرگی|وام\s+بزرگ|قسط\s+مسکن|قسط\s+ماشین|قسط\s+خودرو)(?=\s|$)"""
     )
 
+    private val futureObligationMillionMarkerRegex = Regex(
+        """(?<=^|\s)(?:قسط|قسطی|اقساط|وام|چک|چکم)(?=\s|$)"""
+    )
+
     private fun shouldInferColloquialMillionScale(clause: String, numVal: Double): Boolean {
         if (numVal !in 1.0..999.0) return false
-        return colloquialMillionMacroRegex.containsMatchIn(clause)
+        if (colloquialMillionMacroRegex.containsMatchIn(clause)) return true
+        // Future unpaid installment/loan/check obligations ("۲۴ تومان قسط بدم", "۱۰ تومن چک بدم")
+        // refer to millions of Tomans, while past micro fees ("۳۵ تومان هزینه قسط پنجم وام دیشب") stay in thousands.
+        if (futureObligationMillionMarkerRegex.containsMatchIn(clause) &&
+            detectVoiceCommitmentKind(clause) != null &&
+            !clause.contains("هزینه قسط")
+        ) {
+            return true
+        }
+        return false
     }
 
     private val colloquialMillionLeadWordValues = mapOf(
@@ -3275,12 +3311,21 @@ object PersianVoiceSlangParserEngine {
             if (left.isNotBlank() &&
                 right.isNotBlank() &&
                 !hasHardNegationMarker(left) &&
-                !hasHardNegationMarker(right) &&
-                parseSpokenPersianAmountToman(left) > 0L &&
-                parseSpokenPersianAmountToman(right) > 0L
+                !hasHardNegationMarker(right)
             ) {
-                parts.add(left)
-                startIdx = m.range.last + 1
+                val leftAmt = parseSpokenPersianAmountToman(left)
+                val rightAmt = parseSpokenPersianAmountToman(right)
+                if (leftAmt > 0L && rightAmt > 0L) {
+                    parts.add(left)
+                    startIdx = m.range.last + 1
+                } else if (leftAmt == 0L && rightAmt > 0L && !isNegatedOrCancelledClause(right)) {
+                    // Drop amountless commentary intro before "ولی"/"اما" (e.g. "سلام من الان مقداری موجودی دارم ولی باید سر ماه ۲۴ تومان قسط بدم")
+                    // whenever the right-hand clause already carries a complete transaction/commitment.
+                    val rightProbe = parseSingleVoiceClause(right, null, "نقدی / دستی")
+                    if (rightProbe.purposeCategory.isNotBlank() || rightProbe.isCommitment) {
+                        startIdx = m.range.last + 1
+                    }
+                }
             }
         }
         val tail = trimmed.substring(startIdx).trim()
@@ -3840,7 +3885,7 @@ object PersianVoiceSlangParserEngine {
     )
 
     private val futureDebtClauseRegex = Regex(
-        """(?<=^|\s)(?:بدهی\s+دارم|بدهی\s+داریم|بدهکارم|بدهکار\s+هستم|باید\s+بدم|باید\s+بدهم|باید\s+پرداخت\s+کنم|قرض\s+دارم|قسط\s+دارم|قسط\s+داریم|اجاره\s+دارم|چک\s+دارم|بدهیم\s+هست|بدهی\s+منه)(?=\s|$)"""
+        """(?<=^|\s)(?:بدهی\s+دارم|بدهی\s+داریم|بدهکارم|بدهکار\s+هستم|باید\s+بدم|باید\s+بدهم|باید\s+پرداخت\s+کنم|قرض\s+دارم|قسط\s+دارم|قسط\s+داریم|اجاره\s+دارم|چک\s+دارم|بدهیم\s+هست|بدهی\s+منه|باید\s+(?:\S+\s+){1,7}(?:قسط|اقساط|چک|اجاره|بدهی|وام|قرض)\s+(?:بدم|بدهم|پرداخت\s+کنم|بپردازم|پاس\s+کنم|تسویه\s+کنم)|باید\s+(?:\S+\s+){1,7}(?:بدم|بدهم|پرداخت\s+کنم|بپردازم|پاس\s+کنم)|(?:سر\s+ماه|اول\s+ماه|آخر\s+ماه|ماه\s+بعد|ماه\s+آینده|هفته\s+بعد|هفته\s+آینده|فردا|پس‌فردا|پس\s+فردا)\s+(?:\S+\s+){0,5}(?:قسط|اقساط|چک|اجاره|بدهی|وام)\s+(?:بدم|بدهم|دارم|داریم|پرداخت\s+کنم|بپردازم|پاس\s+کنم))(?=\s|$)"""
     )
 
     private val futurePlannedPurchaseRegex = Regex(
@@ -3856,8 +3901,15 @@ object PersianVoiceSlangParserEngine {
     )
 
     private val dueDateHintRegex = Regex(
-        """(?<=^|\s)(پس‌فردا|پس\s+فردا|فردا|هفته\s+بعد|هفته\s+آینده|ماه\s+بعد|ماه\s+آینده)(?=\s|$)"""
+        """(?<=^|\s)(سر\s+ماه|اول\s+ماه|آخر\s+ماه|پس‌فردا|پس\s+فردا|فردا|هفته\s+بعد|هفته\s+آینده|ماه\s+بعد|ماه\s+آینده)(?=\s|$)"""
     )
+
+    private val vagueRecentPastRegex = Regex(
+        """(?<=^|\s)(?:(?:یه|یک|۱)\s+)?(?:چند\s+روز\s+(?:پیش|قبل)|اخیراً|اخیرا|تازگی(?:ها|ا)?|این\s+چند\s+روزه?|هفته\s+(?:پیش|گذشته))(?=\s|$|،)"""
+    )
+
+    private val loanInstallmentCommitmentRegex = Regex("""(?<=^|\s)(?:قسط|قسطی|اقساط|وام)(?=\s|$)""")
+    private val sayyadCheckCommitmentRegex = Regex("""(?<=^|\s)(?:چک|چکم|چکِ|صیادی)(?=\s|$)""")
 
     private val pastDayOffsetTwoRegex = Regex("""(?<=^|\s)(?:پریروز|دو\s+روز\s+پیش|۲\s+روز\s+پیش|پریشب)(?=\s|$)""")
     private val pastDayOffsetOneRegex = Regex("""(?<=^|\s)(?:دیروز|دیشب|یک\s+روز\s+پیش|یه\s+روز\s+پیش)(?=\s|$)""")
@@ -3912,7 +3964,14 @@ object PersianVoiceSlangParserEngine {
         val isPlannedFuturePurchase = detectedCommitmentKind == "DEBT" &&
             futurePlannedPurchaseRegex.containsMatchIn(cleaned) &&
             !futureDebtClauseRegex.containsMatchIn(cleaned)
+        val commitmentCategory = when {
+            detectedCommitmentKind == "DEBT" && loanInstallmentCommitmentRegex.containsMatchIn(cleaned) -> "LOAN_INSTALLMENT"
+            detectedCommitmentKind == "DEBT" && sayyadCheckCommitmentRegex.containsMatchIn(cleaned) -> "SAYYAD_ISSUED"
+            else -> "DONG"
+        }
         val commitmentSubLabel = when {
+            commitmentCategory == "LOAN_INSTALLMENT" -> "وام و قسط"
+            commitmentCategory == "SAYYAD_ISSUED" -> "چک صیادی"
             isExpectedFutureInflow -> "واریز آینده"
             isPlannedFuturePurchase -> "برنامه خرید"
             detectedCommitmentKind == "RECEIVABLE" -> "طلب"
@@ -3936,6 +3995,11 @@ object PersianVoiceSlangParserEngine {
         } else {
             extractPastRelativeDayOffset(rawSpeech)
         }
+        val isVagueRecentPast = !isTaggingExistingSms &&
+            detectedCommitmentKind == null &&
+            effectiveExplicitJalaliDate.isBlank() &&
+            extractedPastDayOffset == 0 &&
+            vagueRecentPastRegex.containsMatchIn(cleaned)
         val isApproximate = !isTaggingExistingSms && isApproximateAmountSpeech(speechWithoutExplicitDate)
         val isIncomeClause = when {
             isTaggingExistingSms -> false
@@ -3995,8 +4059,12 @@ object PersianVoiceSlangParserEngine {
         }
         val cardLabel = if (effectiveBankName == "نقدی / دستی") "نقدی / دستی" else "کارت $effectiveBankName"
 
-        // 4. Protect item quantities (after stripping stammered mental-math chains)
-        val protectedQuantities = protectItemQuantities(speechBeforeDong)
+        // 4. Strip vague recent-past phrases ("یه چند روز پیش", "اخیراً", "هفته پیش") BEFORE quantity protection
+        //    so "یه چند روز پیش" NEVER turns into "۱ چند روز پیش" in the transaction title!
+        val speechForTitle = vagueRecentPastRegex.replace(speechBeforeDong, " ")
+            .replace(whitespaceRegex, " ")
+            .trim()
+        val protectedQuantities = protectItemQuantities(speechForTitle)
         var corePhrase = protectedQuantities.protectedText
 
         exactPhraseAmounts.forEach { (phrase, _) ->
@@ -4092,7 +4160,7 @@ object PersianVoiceSlangParserEngine {
                 .replace(dueDateHintRegex, " ")
                 .replace(futureExpectedInflowRegex, " ")
                 .replace(futurePlannedPurchaseRegex, " ")
-                .replace(Regex("""(?<=^|\s)(?:دارم|داریم|هستم|هست|باید\s+بدم|باید\s+بدهم|باید\s+پرداخت\s+کنم|باید\s+بگیرم|قراره\s+بهم\s+بده|قراره\s+بهم\s+بدن|باید\s+بهم\s+بده|باید\s+بهم\s+بدن|بخرم|بگیرم|بدم|بدهم|پرداخت\s+کنم|خرج\s+کنم)(?=\s|$)"""), " ")
+                .replace(Regex("""(?<=^|\s)(?:دارم|داریم|هستم|هست|باید\s+بدم|باید\s+بدهم|باید\s+پرداخت\s+کنم|باید\s+بگیرم|باید|قراره\s+بهم\s+بده|قراره\s+بهم\s+بدن|باید\s+بهم\s+بده|باید\s+بهم\s+بدن|بخرم|بگیرم|بدم|بدهم|بپردازم|پاس\s+کنم|پرداخت\s+کنم|خرج\s+کنم)(?=\s|$)"""), " ")
                 .replace(Regex("""(?<=^|\s)(?:بدهکارم|بدهکار)(?=\s|$)"""), " بدهی ")
                 .replace(Regex("""(?<=^|\s)(?:طلبکارم|طلبکار)(?=\s|$)"""), " طلب ")
                 .replace(Regex("""(?<=^|\s)به\s+([ء-ۿ\u200C]+)\s+بدهی(?=\s|$)"""), "بدهی به $1")
@@ -4198,6 +4266,8 @@ object PersianVoiceSlangParserEngine {
         val safeDongAmount = dongAmount.coerceIn(0L, totalToman)
         val userShare = (totalToman - safeDongAmount).coerceAtLeast(0L)
         val category = when {
+            commitmentCategory == "LOAN_INSTALLMENT" -> "تعهدات (وام و قسط)"
+            commitmentCategory == "SAYYAD_ISSUED" -> "تعهدات (چک صیادی)"
             isExpectedFutureInflow -> "تعهدات (واریز آینده)"
             isPlannedFuturePurchase -> "تعهدات (برنامه خرید)"
             detectedCommitmentKind == "DEBT" -> "تعهدات (بدهی)"
@@ -4222,7 +4292,9 @@ object PersianVoiceSlangParserEngine {
             eventDayOffset = extractedPastDayOffset,
             commitmentSubLabel = commitmentSubLabel,
             isApproximateAmount = isApproximate,
-            explicitJalaliDate = effectiveExplicitJalaliDate
+            explicitJalaliDate = effectiveExplicitJalaliDate,
+            isVagueRecentPast = isVagueRecentPast,
+            commitmentCategory = commitmentCategory
         )
     }
 

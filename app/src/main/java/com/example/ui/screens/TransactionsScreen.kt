@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -41,11 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -76,31 +73,20 @@ private val jalaliMonthNames = arrayOf(
     "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"
 )
 
-// Hoisted static shapes and colors matching the HeroMathBreakdownBottomSheet North Star (zero per-frame allocations)
+// Hoisted static shapes and colors matching the approved AccountsScreen minimalist aesthetic
 private val TxCardShape20 = RoundedCornerShape(20.dp)
-private val TxGroupSingleShape: Shape = RoundedCornerShape(20.dp)
-private val TxGroupTopShape: Shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
-private val TxGroupMiddleShape: Shape = RectangleShape
-private val TxGroupBottomShape: Shape = RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp)
-private val TxMicPillShape10 = RoundedCornerShape(10.dp)
-private val TxUntaggedRowBg = Color(0xFF102432)
-private val TxIncomeCardBg = NishapurTurquoiseDeep.copy(alpha = 0.52f)
+private val TxMicPillShape12 = RoundedCornerShape(12.dp)
 private val TxIncomeIconBg = NishapurTurquoiseBright.copy(alpha = 0.20f)
-private val TxExpenseCardBg = RubyRose.copy(alpha = 0.18f)
 private val TxExpenseIconBg = RubyRoseSoft.copy(alpha = 0.18f)
 private val TxIncomeTagBg = NishapurTurquoiseDeep.copy(alpha = 0.72f)
 private val TxExpenseTagBg = RubyRose.copy(alpha = 0.22f)
-private val TxDividerColor = OrosiHairline.copy(alpha = 0.45f)
+private val TxDividerColor = OrosiHairline.copy(alpha = 0.50f)
 private val TxUnitIncomeColor = NishapurTurquoiseSoft.copy(alpha = 0.80f)
 private val TxUnitExpenseColor = RubyRoseSoft.copy(alpha = 0.80f)
 private val TxUnitMutedColor = OrosiOnSurfaceVariant.copy(alpha = 0.80f)
 
-private enum class RowGroupPosition {
-    SINGLE, FIRST, MIDDLE, LAST
-}
-
 @Immutable
-private data class GroupedTxRowUi(
+private data class LedgerTxRowUi(
     val transaction: TransactionEntity,
     val shortBank: String,
     val logoKey: String?,
@@ -112,8 +98,7 @@ private data class GroupedTxRowUi(
     val formattedAmountRun: String,
     val hasCustomNote: Boolean,
     val primaryTitle: String,
-    val isLongTitle: Boolean,
-    val groupPosition: RowGroupPosition
+    val isLongTitle: Boolean
 )
 
 @Immutable
@@ -122,7 +107,7 @@ private data class DayTransactionGroup(
     val dateHeaderLabel: String,
     val dayNetSumToman: Long,
     val formattedDayNetRun: String,
-    val rows: List<GroupedTxRowUi>
+    val rows: List<LedgerTxRowUi>
 )
 
 @Composable
@@ -170,7 +155,7 @@ fun TransactionsScreen(
     }
 
     // Group strictly after sorting by timestampMillis DESC so date headers are chronological newest -> oldest.
-    // Each row stays an independent LazyColumn item with precomputed groupPosition for 120Hz recycling.
+    // Every transaction renders as its own independent minimalist card matching AccountsScreen for 120Hz fluidity.
     val sortedDayGroups = remember(filteredTransactions) {
         filteredTransactions
             .groupBy { it.jalaliDate }
@@ -185,8 +170,7 @@ fun TransactionsScreen(
                 val netSum = sortedDayTxs.sumOf { tx ->
                     if (tx.type == "INCOME") tx.totalAmountToman else -tx.totalAmountToman
                 }
-                val lastIdx = sortedDayTxs.lastIndex
-                val rowModels = sortedDayTxs.mapIndexed { idx, tx ->
+                val rowModels = sortedDayTxs.map { tx ->
                     val isIncome = tx.type == "INCOME"
                     val shortBank = tx.shortBankName
                     val hasCustomNote = !tx.isUntagged &&
@@ -197,16 +181,10 @@ fun TransactionsScreen(
                         tx.purpose != "واریز به حساب"
                     val primaryTitle = when {
                         hasCustomNote -> tx.title.ifBlank { tx.displayTitle }
-                        tx.isUntagged -> if (isIncome) "واریز به کارت" else "خرید کارتی"
+                        tx.isUntagged -> if (isIncome) "واریز به کارت ($shortBank)" else "خرید کارتی ($shortBank)"
                         else -> tx.title.ifBlank { tx.displayTitle }
                     }
                     val dispAmt = tx.userShareToman.takeIf { it > 0L } ?: tx.totalAmountToman
-                    val position = when {
-                        lastIdx == 0 -> RowGroupPosition.SINGLE
-                        idx == 0 -> RowGroupPosition.FIRST
-                        idx == lastIdx -> RowGroupPosition.LAST
-                        else -> RowGroupPosition.MIDDLE
-                    }
                     val amountColor = when (tx.type) {
                         "INCOME" -> NishapurTurquoiseSoft
                         "GOLD_SAVE" -> SaffronGoldLight
@@ -219,7 +197,7 @@ fun TransactionsScreen(
                         "SELF_TRANSFER" -> TxUnitMutedColor
                         else -> TxUnitExpenseColor
                     }
-                    GroupedTxRowUi(
+                    LedgerTxRowUi(
                         transaction = tx,
                         shortBank = shortBank,
                         logoKey = JibemanAssetLogoCache.resolveBankLogoKey(shortBank),
@@ -231,8 +209,7 @@ fun TransactionsScreen(
                         formattedAmountRun = PersianNumberUtils.formatIsolatedAmountRun(dispAmt, isIncome),
                         hasCustomNote = hasCustomNote,
                         primaryTitle = primaryTitle,
-                        isLongTitle = primaryTitle.length > 22,
-                        groupPosition = position
+                        isLongTitle = primaryTitle.length > 22
                     )
                 }
                 DayTransactionGroup(
@@ -256,9 +233,9 @@ fun TransactionsScreen(
             .fillMaxSize()
             .testTag("transactions_screen"),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(0.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // 1. Minimalist Borderless Month Selector matching North Star calm aesthetic
+        // 1. Minimalist Borderless Month Selector
         item(key = "month_selector_header", contentType = "month_selector") {
             Row(
                 modifier = Modifier
@@ -326,31 +303,32 @@ fun TransactionsScreen(
                     }
                 }
             }
-            Spacer(modifier = Modifier.height(12.dp))
         }
 
-        // 2. Minimalist 2-Column Monthly Inflow/Outflow Header (exact HeroMathBreakdownBottomSheet North Star grammar)
+        // 2. Compact Single-Strip Monthly Summary (calm, minimal vertical footprint)
         item(key = "monthly_summary_cards", contentType = "month_summary") {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(OrosiSurfaceContainer, TxCardShape20)
+                    .padding(horizontal = 14.dp, vertical = 11.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .background(TxIncomeCardBg, TxCardShape20)
-                        .padding(horizontal = 14.dp, vertical = 13.dp)
                         .testTag("monthly_income_summary_card"),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                         Box(
                             contentAlignment = Alignment.Center,
                             modifier = Modifier
-                                .size(22.dp)
+                                .size(18.dp)
                                 .clip(CircleShape)
                                 .background(TxIncomeIconBg)
                         ) {
@@ -358,12 +336,15 @@ fun TransactionsScreen(
                                 imageVector = Icons.Outlined.ArrowDownward,
                                 contentDescription = null,
                                 tint = NishapurTurquoiseBright,
-                                modifier = Modifier.size(13.dp)
+                                modifier = Modifier.size(11.dp)
                             )
                         }
                         Text(
-                            text = "دریافتی ماه",
-                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            text = "دریافتی",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.5.sp
+                            ),
                             color = NishapurTurquoiseSoft,
                             maxLines = 1
                         )
@@ -371,32 +352,36 @@ fun TransactionsScreen(
                     OrosiAmountText(
                         amountToman = monthlyIncomeToman,
                         color = AlabasterSilk,
-                        numberStyle = MaterialTheme.typography.titleMedium.copy(fontSize = 15.5.sp),
+                        numberStyle = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp),
                         numberFontWeight = FontWeight.ExtraBold,
-                        unitStyle = MaterialTheme.typography.labelSmall,
-                        unitColor = NishapurTurquoiseSoft,
+                        unitStyle = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                        unitColor = TxUnitIncomeColor,
                         isIncome = monthlyIncomeToman > 0L,
-                        hideAmount = hideAmounts,
-                        stackedUnit = true
+                        hideAmount = hideAmounts
                     )
                 }
+
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .height(34.dp)
+                        .background(TxDividerColor)
+                )
 
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .background(TxExpenseCardBg, TxCardShape20)
-                        .padding(horizontal = 14.dp, vertical = 13.dp)
                         .testTag("monthly_expense_summary_card"),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                         Box(
                             contentAlignment = Alignment.Center,
                             modifier = Modifier
-                                .size(22.dp)
+                                .size(18.dp)
                                 .clip(CircleShape)
                                 .background(TxExpenseIconBg)
                         ) {
@@ -404,12 +389,15 @@ fun TransactionsScreen(
                                 imageVector = Icons.Outlined.ArrowUpward,
                                 contentDescription = null,
                                 tint = RubyRoseSoft,
-                                modifier = Modifier.size(13.dp)
+                                modifier = Modifier.size(11.dp)
                             )
                         }
                         Text(
-                            text = "پرداختی ماه",
-                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            text = "پرداختی",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.5.sp
+                            ),
                             color = RubyRoseSoft,
                             maxLines = 1
                         )
@@ -417,21 +405,18 @@ fun TransactionsScreen(
                     OrosiAmountText(
                         amountToman = monthlyExpenseToman,
                         color = AlabasterSilk,
-                        numberStyle = MaterialTheme.typography.titleMedium.copy(fontSize = 15.5.sp),
+                        numberStyle = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp),
                         numberFontWeight = FontWeight.ExtraBold,
-                        unitStyle = MaterialTheme.typography.labelSmall,
-                        unitColor = RubyRoseSoft,
-                        hideAmount = hideAmounts,
-                        stackedUnit = true
+                        unitStyle = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                        unitColor = TxUnitExpenseColor,
+                        hideAmount = hideAmounts
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(6.dp))
         }
 
         if (isLoadingSelectedMonth && shimmerBrush != null) {
             item(key = "month_loading_banner", contentType = "loading_banner") {
-                Spacer(modifier = Modifier.height(10.dp))
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -455,17 +440,13 @@ fun TransactionsScreen(
                             .clip(RoundedCornerShape(50))
                     )
                 }
-                Spacer(modifier = Modifier.height(10.dp))
             }
             items(4, key = { "month_shimmer_row_$it" }, contentType = { "shimmer_row" }) {
-                TransactionRowSkeletonShimmer(
-                    shimmerBrush = shimmerBrush,
-                    modifier = Modifier.padding(bottom = 10.dp)
-                )
+                TransactionRowSkeletonShimmer(shimmerBrush = shimmerBrush)
             }
         } else if (sortedDayGroups.isEmpty()) {
             item(key = "empty_month_card", contentType = "empty_state") {
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -484,7 +465,7 @@ fun TransactionsScreen(
                 }
             }
         } else {
-            // 3. Compact Grouped Daily Ledger Sheets — each row is an independent LazyColumn item for 120Hz fluidity
+            // 3. Independent Minimalist Transaction Cards matching AccountsScreen aesthetic
             sortedDayGroups.forEach { dayGroup ->
                 item(key = "header_${dayGroup.dateSortKey}", contentType = "day_header") {
                     val dayNetColor = when {
@@ -501,7 +482,7 @@ fun TransactionsScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 16.dp, bottom = 7.dp, start = 4.dp, end = 4.dp),
+                            .padding(top = 8.dp, bottom = 0.dp, start = 4.dp, end = 4.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -531,7 +512,7 @@ fun TransactionsScreen(
                 items(
                     items = dayGroup.rows,
                     key = { row -> "month_tx_${row.transaction.id}" },
-                    contentType = { "grouped_tx_row" }
+                    contentType = { "ledger_tx_card" }
                 ) { row ->
                     val tx = row.transaction
                     if (activeDeleteConfirmId == tx.id) {
@@ -543,7 +524,7 @@ fun TransactionsScreen(
                             },
                             onCancel = { activeDeleteConfirmId = null }
                         ) {
-                            CompactGroupedLedgerRow(
+                            MinimalLedgerTransactionCard(
                                 row = row,
                                 hideAmounts = hideAmounts,
                                 onTransactionClick = onTransactionClick,
@@ -552,7 +533,7 @@ fun TransactionsScreen(
                             )
                         }
                     } else {
-                        CompactGroupedLedgerRow(
+                        MinimalLedgerTransactionCard(
                             row = row,
                             hideAmounts = hideAmounts,
                             onTransactionClick = onTransactionClick,
@@ -568,51 +549,31 @@ fun TransactionsScreen(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun CompactGroupedLedgerRow(
-    row: GroupedTxRowUi,
+private fun MinimalLedgerTransactionCard(
+    row: LedgerTxRowUi,
     hideAmounts: Boolean,
     onTransactionClick: (TransactionEntity) -> Unit,
     onRowLongClickId: ((Long) -> Unit)? = null,
     onUntaggedMicClick: (TransactionEntity) -> Unit
 ) {
     val tx = row.transaction
-    val cardBg = if (tx.isUntagged) TxUntaggedRowBg else OrosiSurfaceContainer
-    val rowShape = when (row.groupPosition) {
-        RowGroupPosition.SINGLE -> TxGroupSingleShape
-        RowGroupPosition.FIRST -> TxGroupTopShape
-        RowGroupPosition.MIDDLE -> TxGroupMiddleShape
-        RowGroupPosition.LAST -> TxGroupBottomShape
-    }
-    val drawBottomDivider = row.groupPosition == RowGroupPosition.FIRST || row.groupPosition == RowGroupPosition.MIDDLE
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(cardBg, rowShape)
-            .drawBehind {
-                if (drawBottomDivider) {
-                    val strokePx = 0.75.dp.toPx()
-                    val insetPx = 14.dp.toPx()
-                    drawLine(
-                        color = TxDividerColor,
-                        start = Offset(insetPx, size.height - strokePx * 0.5f),
-                        end = Offset(size.width - insetPx, size.height - strokePx * 0.5f),
-                        strokeWidth = strokePx
-                    )
-                }
-            }
+            .background(OrosiSurfaceContainer, TxCardShape20)
             .combinedClickable(
                 onClick = { onTransactionClick(tx) },
                 onLongClick = if (onRowLongClickId != null) { { onRowLongClickId(tx.id) } } else null
             )
-            .padding(horizontal = 14.dp, vertical = 11.dp)
+            .padding(horizontal = 15.dp, vertical = 13.dp)
             .testTag("grouped_tx_${tx.id}"),
-        horizontalArrangement = Arrangement.spacedBy(11.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         BankLogoAvatar(
             bankName = row.shortBank,
-            size = 38.dp,
+            size = 40.dp,
             preResolvedLogoKey = row.logoKey
         )
 
@@ -622,11 +583,11 @@ private fun CompactGroupedLedgerRow(
         ) {
             Text(
                 text = row.primaryTitle,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = if (row.hasCustomNote) FontWeight.Bold else FontWeight.SemiBold,
-                fontSize = if (row.isLongTitle) 13.sp else 14.sp,
-                lineHeight = 18.sp,
-                color = if (row.hasCustomNote) AlabasterSilk else AlabasterSilk.copy(alpha = 0.90f),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                fontSize = if (row.isLongTitle) 13.5.sp else 14.5.sp,
+                lineHeight = 19.sp,
+                color = AlabasterSilk,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
@@ -646,26 +607,27 @@ private fun CompactGroupedLedgerRow(
                 val tagContentColor = if (row.isIncome) NishapurTurquoiseSoft else RubyRoseSoft
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
                     modifier = Modifier
-                        .padding(top = 2.dp)
+                        .padding(top = 3.dp)
                         .wrapContentWidth(unbounded = false)
-                        .background(tagBg, TxMicPillShape10)
+                        .background(tagBg, TxMicPillShape12)
                         .clickable { onUntaggedMicClick(tx) }
-                        .padding(horizontal = 9.dp, vertical = 5.dp)
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
                         .testTag("untagged_mic_button_${tx.id}")
                 ) {
                     Icon(
                         imageVector = Icons.Default.Mic,
                         contentDescription = untaggedBtnLabel,
                         tint = tagContentColor,
-                        modifier = Modifier.size(12.5.dp)
+                        modifier = Modifier.size(13.dp)
                     )
                     Text(
                         text = untaggedBtnLabel,
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         fontSize = 11.5.sp,
+                        lineHeight = 15.sp,
                         color = tagContentColor,
                         maxLines = 1,
                         softWrap = false

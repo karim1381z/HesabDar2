@@ -1525,8 +1525,16 @@ class OrosiFinanceRepository(
     suspend fun cleanRescanRealSms(context: Context): Int = cleanPurgeAndRescanRealSms(context)
 
     private suspend fun insertVoiceCommitment(item: ParsedVoiceExpense, timestampMillis: Long) {
+        val resolvedCategory = item.commitmentCategory.takeIf {
+            it == "LOAN_INSTALLMENT" || it == "SAYYAD_ISSUED" || it == "DONG"
+        } ?: "DONG"
         val cleanPurpose = item.purposeCategory.trim().ifBlank {
-            if (item.commitmentKind == "RECEIVABLE") "طلب" else "بدهی"
+            when {
+                resolvedCategory == "LOAN_INSTALLMENT" -> "قسط وام"
+                resolvedCategory == "SAYYAD_ISSUED" -> "چک صیادی"
+                item.commitmentKind == "RECEIVABLE" -> "طلب"
+                else -> "بدهی"
+            }
         }
         val isReceivable = item.commitmentKind == "RECEIVABLE" || item.isIncome
         val subTag = item.commitmentSubLabel.trim()
@@ -1536,11 +1544,15 @@ class OrosiFinanceRepository(
             JalaliCalendarUtils.timestampToJalali(timestampMillis).dateWithYear
         }
         val counterpartyLabel = when {
+            resolvedCategory == "LOAN_INSTALLMENT" -> "وام و قسط • ثبت صوتی"
+            resolvedCategory == "SAYYAD_ISSUED" -> "چک صیادی • ثبت صوتی"
             subTag.isNotBlank() -> "$subTag • ثبت صوتی"
             isReceivable -> "طلب دارم • ثبت صوتی"
             else -> "بدهی دارم • ثبت صوتی"
         }
         val statusLabel = when {
+            resolvedCategory == "LOAN_INSTALLMENT" -> "در انتظار پرداخت (قسط)"
+            resolvedCategory == "SAYYAD_ISSUED" -> "ثبت شده در سامانه صیاد"
             subTag == "برنامه خرید" -> "برنامه خرید (تعهد آینده)"
             subTag == "واریز آینده" -> "واریز آینده (دریافتنی)"
             isReceivable -> "طلب دارم (دریافتنی)"
@@ -1548,7 +1560,7 @@ class OrosiFinanceRepository(
         }
         dao.insertCommitment(
             CommitmentEntity(
-                category = "DONG",
+                category = resolvedCategory,
                 title = cleanPurpose,
                 counterparty = counterpartyLabel,
                 amountToman = item.totalAmountToman,

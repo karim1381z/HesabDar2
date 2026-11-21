@@ -1238,6 +1238,91 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun testVoiceNluV26CommitmentsVaguePast7DayMatchAndCashflowNetBalance() {
+        // 1. Video fbatch (01:28): "سلام من الان مقداری موجودی دارم ولی باید سر ماه ۲۴ تومان قسط بدم"
+        val video2 = PersianVoiceSlangParserEngine.parseVoiceCommand(
+            "سلام من الان مقداری موجودی دارم ولی باید سر ماه ۲۴ تومان قسط بدم"
+        )
+        assertEquals("DEBT", video2.commitmentKind)
+        assertEquals("LOAN_INSTALLMENT", video2.commitmentCategory)
+        assertEquals("وام و قسط", video2.commitmentSubLabel)
+        assertEquals(24_000_000L, video2.totalAmountToman)
+        assertEquals("سر ماه", video2.dueDateHint)
+        assertEquals("قسط", video2.purposeCategory)
+
+        // 2. Regression guard: past micro installment fee STILL stays at 35,000 Tomans (not promoted to millions!)
+        val pastMicroFee = PersianVoiceSlangParserEngine.parseVoiceCommand("۳۵ تومان هزینه قسط پنجم وام دیشب")
+        assertEquals(null, pastMicroFee.commitmentKind)
+        assertEquals(35_000L, pastMicroFee.totalAmountToman)
+        assertEquals("هزینه قسط پنجم وام", pastMicroFee.purposeCategory)
+
+        // 3. Generalized spaced Sayyad check obligation + "سر ماه" / "آخر ماه" Jalali date resolution
+        val checkObligation = PersianVoiceSlangParserEngine.parseVoiceCommand("باید آخر ماه ۱۰ تومن چک بدم")
+        assertEquals("DEBT", checkObligation.commitmentKind)
+        assertEquals("SAYYAD_ISSUED", checkObligation.commitmentCategory)
+        assertEquals(10_000_000L, checkObligation.totalAmountToman)
+        assertEquals("آخر ماه", checkObligation.dueDateHint)
+
+        val aban30Ts = JalaliCalendarUtils.jalaliDayStartMillis(1405, 8, 30) + 12L * 3_600_000L
+        assertEquals("۱ آذر ۱۴۰۵", JalaliCalendarUtils.resolveRelativeJalaliDate("سر ماه", aban30Ts))
+        assertEquals("۱ آذر ۱۴۰۵", JalaliCalendarUtils.resolveRelativeJalaliDate("اول ماه", aban30Ts))
+        assertEquals("۳۰ آبان ۱۴۰۵", JalaliCalendarUtils.resolveRelativeJalaliDate("آخر ماه", aban30Ts))
+
+        // 4. Video fbatch_31 (00:35): "خوب من یه چند روز پیش ۵۰۰ هزار تومن دادم به تارا"
+        val video3 = PersianVoiceSlangParserEngine.parseVoiceCommand(
+            "خوب من یه چند روز پیش ۵۰۰ هزار تومن دادم به تارا"
+        )
+        assertEquals("تارا", video3.purposeCategory)
+        assertEquals(500_000L, video3.totalAmountToman)
+        assertEquals(false, video3.isIncome)
+        assertEquals(false, video3.isCommitment)
+        assertEquals(true, video3.isVagueRecentPast)
+
+        // 5. 7-day rolling SMS match for vague recent past (51 hours old Blu SMS)
+        val nowTs = JalaliCalendarUtils.jalaliDayStartMillis(1405, 8, 30) + 22L * 3_600_000L
+        val sms51hAgoTs = nowTs - 51L * 3_600_000L
+        val sms51hJalali = JalaliCalendarUtils.timestampToJalali(sms51hAgoTs)
+        val matchRes = OrosiVoiceSmsMatcher.matchBatch(
+            items = listOf(video3),
+            untaggedBankSms = listOf(
+                UntaggedSmsCandidate(
+                    id = 950L,
+                    bankName = "بلو",
+                    amountToman = 500_000L,
+                    isIncome = false,
+                    timestamp = sms51hAgoTs,
+                    jalaliDate = sms51hJalali.dateWithYear,
+                    timeStr = sms51hJalali.timeStr,
+                    cardInfo = "کارت بلو"
+                )
+            ),
+            nowMillis = nowTs
+        ).first()
+        assertEquals(true, matchRes.isExactAutoMatch)
+        assertEquals(950L, matchRes.matchedCandidate?.id)
+
+        // 6. Generalized vague recent past ("اخیراً" / "هفته پیش")
+        val recentlyBakery = PersianVoiceSlangParserEngine.parseVoiceCommand("اخیراً ۱۵۰ تومن دادم نانوایی")
+        assertEquals("نانوایی", recentlyBakery.purposeCategory)
+        assertEquals(150_000L, recentlyBakery.totalAmountToman)
+        assertEquals(true, recentlyBakery.isVagueRecentPast)
+
+        // 7. Pure payday-cycle cashflow net balance: unpaid installments/checks are tracked separately
+        val cashflowSummary = OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle(
+            transactions = listOf(
+                CashflowTxSnapshot(1L, "INCOME", 42_953_275L, 42_953_275L, "بلو", aban30Ts - 3_600_000L),
+                CashflowTxSnapshot(2L, "EXPENSE", 44_079_679L, 44_079_679L, "بلو", aban30Ts - 1_800_000L)
+            ),
+            paydayStartDay = 1,
+            reservedCommitmentsToman = 24_000_000L,
+            nowMillis = aban30Ts
+        )
+        assertEquals(-1_126_404L, cashflowSummary.netBalanceToman)
+        assertEquals(24_000_000L, cashflowSummary.reservedCommitmentsToman)
+        assertEquals(CashflowHealthStatus.DEFICIT, cashflowSummary.healthStatus)
+    }
+
+    @Test
     fun testFullOrosiRegressionAndStressSuitePasses100Percent() {
         val report = com.example.domain.OrosiRegressionSuite.runFullRegressionAndStressSuite()
         for (r in report.results) {
@@ -1249,8 +1334,8 @@ class ExampleUnitTest {
         }
         assertEquals(true, report.allPassed)
         assertEquals(com.example.domain.OrosiRegressionSuite.EXPECTED_TOTAL_CASES, report.totalCount)
-        assertEquals(66, report.totalCount)
-        assertEquals(66, report.passedCount)
+        assertEquals(72, report.totalCount)
+        assertEquals(72, report.passedCount)
     }
 }
 

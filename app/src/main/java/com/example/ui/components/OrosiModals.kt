@@ -163,6 +163,10 @@ fun VoiceOverlayBottomSheet(
     onToggleSingleScale: () -> Unit = {},
     onSetSingleMatchedBankTx: (Long?) -> Unit = {},
     onSetMultiItemMatchedBankTx: (index: Int, txId: Long?) -> Unit = { _, _ -> },
+    onToggleSingleDestination: () -> Unit = {},
+    onSetSingleCommitmentCategory: (String) -> Unit = {},
+    onToggleMultiItemDestination: (index: Int) -> Unit = {},
+    onSetMultiItemCommitmentCategory: (index: Int, category: String) -> Unit = { _, _ -> },
     onSimulateVoiceRecord: () -> Unit,
     onConfirmVoiceEntry: () -> Unit,
     onDismiss: () -> Unit
@@ -1006,7 +1010,22 @@ fun VoiceOverlayBottomSheet(
                                 }
                             }
 
-                            // Row 5: Smart Bank SMS Auto-Match / 1-Tap Link Strip (non-commitment items only)
+                            // Row 5: Interactive Destination Switch (تراکنش عادی ↔ تعهدات + انتخاب دسته)
+                            if (targetTx == null) {
+                                VoiceDestinationControlSection(
+                                    isCommitment = isCommItem,
+                                    isIncome = item.isIncome,
+                                    commitmentCategory = item.commitmentCategory,
+                                    dueDateHint = item.dueDateHint,
+                                    testTagPrefix = "multi_$idx",
+                                    onToggleDestination = { onToggleMultiItemDestination(idx) },
+                                    onSelectCommitmentCategory = { cat ->
+                                        onSetMultiItemCommitmentCategory(idx, cat)
+                                    }
+                                )
+                            }
+
+                            // Row 6: Smart Bank SMS Auto-Match / 1-Tap Link Strip (non-commitment items only)
                             if (targetTx == null && !isCommItem) {
                                 VoiceBankSmsMatchStrip(
                                     matchResult = voiceState.multiAutoMatches.getOrNull(idx),
@@ -1331,6 +1350,16 @@ fun VoiceOverlayBottomSheet(
                                     }
                                 }
                             }
+
+                            VoiceDestinationControlSection(
+                                isCommitment = isSingleCommitment,
+                                isIncome = voiceState.isIncome,
+                                commitmentCategory = voiceState.commitmentCategory,
+                                dueDateHint = voiceState.dueDateHint,
+                                testTagPrefix = "single",
+                                onToggleDestination = onToggleSingleDestination,
+                                onSelectCommitmentCategory = onSetSingleCommitmentCategory
+                            )
 
                             if (!isSingleCommitment) {
                                 VoiceBankSmsMatchStrip(
@@ -1707,6 +1736,166 @@ private data class CashflowBadgeVisuals(
     val textColor: Color
 )
 
+@Composable
+private fun VoiceDestinationControlSection(
+    isCommitment: Boolean,
+    isIncome: Boolean,
+    commitmentCategory: String,
+    dueDateHint: String,
+    testTagPrefix: String,
+    onToggleDestination: () -> Unit,
+    onSelectCommitmentCategory: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        if (!isCommitment) {
+            Surface(
+                onClick = onToggleDestination,
+                shape = RoundedCornerShape(12.dp),
+                color = RoyalAmethyst.copy(alpha = 0.16f),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    RoyalAmethystSoft.copy(alpha = 0.42f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 40.dp)
+                    .testTag("voice_dest_toggle_$testTagPrefix")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Schedule,
+                        contentDescription = null,
+                        tint = RoyalAmethystSoft,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "ثبت در بخش تعهدات (قسط، چک یا بدهی)",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = RoyalAmethystSoft,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        } else {
+            val destSummary = if (dueDateHint.isNotBlank()) {
+                "مقصد: بخش تعهدات ✓ • سررسید: $dueDateHint"
+            } else {
+                "مقصد: بخش تعهدات ✓"
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(RoyalAmethyst.copy(alpha = 0.20f))
+                    .border(1.dp, RoyalAmethystSoft.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Schedule,
+                        contentDescription = null,
+                        tint = RoyalAmethystSoft,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Text(
+                        text = destSummary,
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                        color = AlabasterSilk,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Spacer(modifier = Modifier.width(6.dp))
+                Surface(
+                    onClick = onToggleDestination,
+                    shape = RoundedCornerShape(9.dp),
+                    color = OrosiSurfaceContainer,
+                    modifier = Modifier
+                        .heightIn(min = 32.dp)
+                        .testTag("voice_dest_toggle_$testTagPrefix")
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+                    ) {
+                        Text(
+                            text = "ثبت به عنوان تراکنش",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = PersianLapisLight,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+
+            if (!isIncome) {
+                val categoryOptions = listOf(
+                    "LOAN_INSTALLMENT" to "وام و قسط",
+                    "SAYYAD_ISSUED" to "چک صیادی",
+                    "DONG" to "بدهی و طلب"
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(OrosiSurfaceLow)
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    categoryOptions.forEach { (catKey, label) ->
+                        val selected = commitmentCategory == catKey
+                        Surface(
+                            onClick = { onSelectCommitmentCategory(catKey) },
+                            shape = RoundedCornerShape(9.dp),
+                            color = if (selected) RoyalAmethyst.copy(alpha = 0.45f) else Color.Transparent,
+                            border = androidx.compose.foundation.BorderStroke(
+                                width = if (selected) 1.dp else 0.dp,
+                                color = if (selected) RoyalAmethystSoft else Color.Transparent
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 36.dp)
+                                .testTag("voice_comm_cat_${testTagPrefix}_$catKey")
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium
+                                    ),
+                                    color = if (selected) AlabasterSilk else OrosiOnSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HeroMathBreakdownBottomSheet(
@@ -2050,7 +2239,7 @@ fun HeroMathBreakdownBottomSheet(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     MonthlyReportAmountRow(
-                        label = "کنار گذاشته شده برای قسط و چک",
+                        label = "قسط و چک‌های پیش‌رو (جدا از تراز)",
                         amountToman = summary.reservedCommitmentsToman,
                         valueColor = RoyalAmethystSoft
                     )
