@@ -89,6 +89,7 @@ data class OrosiUiState(
     val showAddCommitmentModal: Boolean = false,
     val showAddBankAccountModal: Boolean = false,
     val isSyncingSms: Boolean = true,
+    val hasLoadedFromDb: Boolean = false,
     val loadingMonthKey: Int? = null,
     val selectedAccountForEdit: BankAccountEntity? = null,
     val selectedAccountCustomSenders: List<String> = emptyList(),
@@ -174,7 +175,8 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
             selectedCommitmentTab = commitmentTab,
             settings = settings ?: AppSettingsEntity(),
             transactions = txs,
-            commitments = commitments
+            commitments = commitments,
+            hasLoadedFromDb = true
         )
     }.combine(
         combine(

@@ -30,7 +30,7 @@ data class RegressionSuiteReport(
  */
 object OrosiRegressionSuite {
 
-    const val EXPECTED_TOTAL_CASES = 60
+    const val EXPECTED_TOTAL_CASES = 66
 
     fun runFullRegressionAndStressSuite(): RegressionSuiteReport {
         val suiteStartNanos = System.nanoTime()
@@ -1151,6 +1151,118 @@ object OrosiRegressionSuite {
                 toThousand == "تغییر واحد به هزار (\u2066\u200E÷۱۰۰۰\u2069)" &&
                 incRun == "\u2066\u200E+۵۰۰,۰۰۰\u2069"
             ok to "$toMillion | $incRun"
+        }
+
+        // 61. Video 4 exact sentence: external exchange withdrawal ("از حساب صرافی برداشت کردم کامل") + sequential split ("و بعد ۵۰۰ تومن بدهی تارا رو دادم")
+        recordTest(
+            category = "برداشت از صرافی و کیف پول (ویدیو ۴ - v2.5)",
+            title = "تشخیص واریز بودن «یک و صد و خورده‌ای از حساب صرافی برداشت کردم کامل» و جداسازی «بعد ۵۰۰ تومن بدهی تارا رو دادم»",
+            inputSummary = "من یک و صد و خورده‌ای از حساب صرافی برداشت کردم کامل و بعد ۵۰۰ تومن بدهی تارا رو دادم",
+            expectedSummary = "۱) برداشت از صرافی (+۱,۱۰۰,۰۰۰ تقریبی) • ۲) بدهی تارا (۵۰۰,۰۰۰ پرداختی)"
+        ) {
+            val phrase = "من یک و صد و خورده‌ای از حساب صرافی برداشت کردم کامل و بعد ۵۰۰ تومن بدهی تارا رو دادم"
+            val items = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(phrase)
+            val ok = items.size == 2 &&
+                items[0].isIncome &&
+                !items[0].isCommitment &&
+                items[0].totalAmountToman == 1_100_000L &&
+                items[0].isApproximateAmount &&
+                items[0].purposeCategory == "برداشت از صرافی" &&
+                !items[1].isIncome &&
+                !items[1].isCommitment &&
+                items[1].totalAmountToman == 500_000L &&
+                items[1].purposeCategory.contains("تارا")
+            ok to items.joinToString(" | ") { "${it.purposeCategory}:${it.totalAmountToman}:inc=${it.isIncome}:approx=${it.isApproximateAmount}" }
+        }
+
+        // 62. Video 4 end-to-end 36h batch auto-match against Blu +1,161,741 (approx) & Blu -500,000 (exact)
+        recordTest(
+            category = "تطبیق خودکار پیامک ویدیو ۴ (v2.5)",
+            title = "اتصال خودکار برداشت از صرافی به واریز +۱,۱۶۱,۷۴۱ بلو و بدهی تارا به برداشت ۵۰۰,۰۰۰ بلو",
+            inputSummary = "ویدیو ۴ + دو پیامک بلو (+۱,۱۶۱,۷۴۱ و ۵۰۰,۰۰۰)",
+            expectedSummary = "مورد ۱ -> بلو +۱,۱۶۱,۷۴۱ (تقریبی) • مورد ۲ -> بلو ۵۰۰,۰۰۰ (دقیق)"
+        ) {
+            val (gy29, gm29, gd29) = JalaliCalendarUtils.jalaliToGregorian(1405, 8, 29)
+            val nowMs = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Tehran")).apply {
+                set(gy29, gm29 - 1, gd29, 3, 24, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }.timeInMillis
+            val sms28Ms = nowMs - (10L * 3_600_000L)
+            val date28 = JalaliCalendarUtils.timestampToJalali(sms28Ms).dateWithYear
+            val items = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(
+                "من یک و صد و خورده‌ای از حساب صرافی برداشت کردم کامل و بعد ۵۰۰ تومن بدهی تارا رو دادم"
+            )
+            val matches = OrosiVoiceSmsMatcher.matchBatch(
+                items = items,
+                untaggedBankSms = listOf(
+                    UntaggedSmsCandidate(601L, "بلو", 1_161_741L, true, sms28Ms, date28, "۱۳:۲۷", "کارت بلو"),
+                    UntaggedSmsCandidate(602L, "بلو", 500_000L, false, nowMs - 7L * 3_600_000L, date28, "۱۹:۵۴", "کارت بلو")
+                ),
+                nowMillis = nowMs
+            )
+            val ok = matches.size == 2 &&
+                matches[0].matchedCandidate?.id == 601L && matches[0].isApproximateAutoMatch &&
+                matches[1].matchedCandidate?.id == 602L && matches[1].isExactAutoMatch
+            ok to "m0=${matches.getOrNull(0)?.matchedCandidate?.id}(approx=${matches.getOrNull(0)?.isApproximateAutoMatch}) | m1=${matches.getOrNull(1)?.matchedCandidate?.id}(exact=${matches.getOrNull(1)?.isExactAutoMatch})"
+        }
+
+        // 63. Video 1 exact sentence: intra-clause predicate continuation ("برداشت کردم و اومد به حسابم") + sequential split ("بعد ۵۰۰ تومن خرج تارا کردم")
+        recordTest(
+            category = "حفظ جهت واریز در ادامه فعل (ویدیو ۱ - v2.5)",
+            title = "عدم برعکس‌شدن جهت دریافتی/پرداختی در «یک و صد و خورده‌ای از حسابم برداشت کردم و اومد به حسابم بعد ۵۰۰ تومن خرج تارا کردم»",
+            inputSummary = "سلام من یک و صد و خورده‌ای از حسابم برداشت کردم و اومد به حسابم بعد ۵۰۰ تومن خرج تارا کردم",
+            expectedSummary = "۱) واریز به حساب (+۱,۱۰۰,۰۰۰ تقریبی) • ۲) تارا (۵۰۰,۰۰۰ پرداختی)"
+        ) {
+            val phrase = "سلام من یک و صد و خورده‌ای از حسابم برداشت کردم و اومد به حسابم بعد ۵۰۰ تومن خرج تارا کردم"
+            val items = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(phrase)
+            val ok = items.size == 2 &&
+                items[0].isIncome &&
+                items[0].totalAmountToman == 1_100_000L &&
+                items[0].isApproximateAmount &&
+                !items[1].isIncome &&
+                items[1].totalAmountToman == 500_000L &&
+                items[1].purposeCategory == "تارا"
+            ok to items.joinToString(" | ") { "${it.purposeCategory}:${it.totalAmountToman}:inc=${it.isIncome}:approx=${it.isApproximateAmount}" }
+        }
+
+        // 64. Generalized external exchange & wallet withdrawals -> INCOME with preserved source title
+        recordTest(
+            category = "برداشت از صرافی و کیف پول (v2.5)",
+            title = "تشخیص واریز بودن برداشت از نوبیتکس و کیف پول دیجی‌پی",
+            inputSummary = "۲ و ۵۰۰ از نوبیتکس برداشت کردم | ۳۰۰ تومن از کیف پول دیجی‌پی برداشت کردم",
+            expectedSummary = "نوبیتکس (+۲,۵۰۰,۰۰۰) | دیجی‌پی (+۳۰۰,۰۰۰)"
+        ) {
+            val p1 = PersianVoiceSlangParserEngine.parseVoiceCommand("۲ و ۵۰۰ از نوبیتکس برداشت کردم")
+            val p2 = PersianVoiceSlangParserEngine.parseVoiceCommand("۳۰۰ تومن از کیف پول دیجی‌پی برداشت کردم")
+            val ok = p1.isIncome && p1.totalAmountToman == 2_500_000L && p1.purposeCategory.contains("نوبیتکس") &&
+                p2.isIncome && p2.totalAmountToman == 300_000L && p2.purposeCategory.contains("دیجی‌پی")
+            ok to "${p1.purposeCategory}(inc=${p1.isIncome},${p1.totalAmountToman}) | ${p2.purposeCategory}(inc=${p2.isIncome},${p2.totalAmountToman})"
+        }
+
+        // 65. Bank ATM / card cash withdrawal guard MUST stay EXPENSE (never misclassified as income)
+        recordTest(
+            category = "گارد برداشت نقدی عابربانک (v2.5)",
+            title = "ثبت «۵۰۰ تومن از عابربانک برداشت کردم» به عنوان پرداختی و نه واریزی",
+            inputSummary = "۵۰۰ تومن از عابربانک برداشت کردم",
+            expectedSummary = "پرداختی (isIncome=false) • ۵۰۰,۰۰۰ تومان"
+        ) {
+            val parsed = PersianVoiceSlangParserEngine.parseVoiceCommand("۵۰۰ تومن از عابربانک برداشت کردم")
+            val ok = !parsed.isIncome && parsed.totalAmountToman == 500_000L
+            ok to "${parsed.purposeCategory} • inc=${parsed.isIncome} • amt=${parsed.totalAmountToman}"
+        }
+
+        // 66. Temporal phrase safety guard ("ماه بعد" / "هفته بعد") MUST NOT falsely split in sequential splitter
+        recordTest(
+            category = "گارد عبارات زمانی در تفکیک «بعد» (v2.5)",
+            title = "عدم شکست اشتباه عبارت «ماه بعد ۲ میلیون قسط دارم و ۵۰۰ تومن خرج کردم» روی کلمه «بعد»",
+            inputSummary = "ماه بعد ۲ میلیون قسط دارم و ۵۰۰ تومن خرج کردم",
+            expectedSummary = "۲ مورد دقیق بدون شکست ناقص روی «ماه بعد»"
+        ) {
+            val items = PersianVoiceSlangParserEngine.parseMultiVoiceCommands("ماه بعد ۲ میلیون قسط دارم و ۵۰۰ تومن خرج کردم")
+            val ok = items.size == 2 &&
+                items[0].totalAmountToman == 2_000_000L &&
+                items[1].totalAmountToman == 500_000L
+            ok to items.joinToString(" | ") { "${it.purposeCategory}:${it.totalAmountToman}:due=${it.dueDateHint}" }
         }
 
         val totalMs = ((System.nanoTime() - suiteStartNanos) / 1_000_000L).coerceAtLeast(1L)

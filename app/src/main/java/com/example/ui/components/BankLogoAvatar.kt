@@ -295,9 +295,10 @@ fun resolveBankLogoDrawableRes(bankName: String): Int? {
 fun BankLogoAvatar(
     bankName: String,
     modifier: Modifier = Modifier,
-    size: Dp = 44.dp
+    size: Dp = 44.dp,
+    preResolvedLogoKey: String? = null
 ) {
-    val logoKey = remember(bankName) { JibemanAssetLogoCache.resolveBankLogoKey(bankName) }
+    val logoKey = preResolvedLogoKey ?: remember(bankName) { JibemanAssetLogoCache.resolveBankLogoKey(bankName) }
     // Once cachedPainters is populated, bypass Snapshot state subscription for zero-overhead 120Hz scrolling.
     val cachedPainter = if (JibemanAssetLogoCache.isReady()) {
         JibemanAssetLogoCache.peekCachedPainter(logoKey)

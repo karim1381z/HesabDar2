@@ -111,6 +111,8 @@ private val DashPillShape50 = RoundedCornerShape(50)
 private val DashUntaggedRowBg = Color(0xFF102432)
 private val DashTankhahCardBg = Color(0xFF112936)
 private val DashDeleteOverlayBg = OrosiSurfaceHigh.copy(alpha = 0.96f)
+private val DashExpenseTagBg = RubyRose.copy(alpha = 0.22f)
+private val DashIncomeTagBg = NishapurTurquoiseDeep.copy(alpha = 0.72f)
 private val DashHeroCircleGlowColor = NishapurTurquoiseBright.copy(alpha = 0.08f)
 private val DashUnitIncomeColor = NishapurTurquoiseSoft.copy(alpha = 0.82f)
 private val DashUnitGoldColor = SaffronGoldLight.copy(alpha = 0.82f)
@@ -138,6 +140,7 @@ fun DashboardScreen(
     commitments: List<CommitmentEntity>,
     transactions: List<TransactionEntity>,
     isSyncingSms: Boolean = false,
+    hasLoadedFromDb: Boolean = true,
     onToggleHideAmounts: () -> Unit,
     onSetOnlyTankhahMode: (Boolean) -> Unit,
     onToggleAccountTankhah: (String) -> Unit,
@@ -203,6 +206,7 @@ fun DashboardScreen(
             DashTxRowUi(
                 transaction = tx,
                 shortBank = shortBank,
+                logoKey = com.example.ui.components.JibemanAssetLogoCache.resolveBankLogoKey(shortBank),
                 rowTitle = rowTitle,
                 subtitleText = tx.simpleSubtitle,
                 displayAmountToman = displayAmt,
@@ -220,7 +224,8 @@ fun DashboardScreen(
     val onRowLongClickForId = remember { { id: Long -> activeDeleteConfirmId = id } }
     val onClearDeleteConfirm = remember { { _: Long -> activeDeleteConfirmId = null } }
 
-    val isInitialSkeletonLoading = isSyncingSms && bankAccounts.isEmpty() && visibleTransactions.isEmpty()
+    // Gate initial skeleton shimmer on hasLoadedFromDb so cold starts with cached Room data NEVER flash shimmer
+    val isInitialSkeletonLoading = hasLoadedFromDb && isSyncingSms && bankAccounts.isEmpty() && visibleTransactions.isEmpty()
     val shimmerBrush = if (isInitialSkeletonLoading) orosiShimmerBrush() else null
 
     LazyColumn(
@@ -1063,6 +1068,7 @@ internal fun TransactionRowSkeletonShimmer(
 private data class DashTxRowUi(
     val transaction: TransactionEntity,
     val shortBank: String,
+    val logoKey: String?,
     val rowTitle: String,
     val subtitleText: String,
     val displayAmountToman: Long,
@@ -1084,6 +1090,9 @@ private fun BankAccountCarouselCard(
     val cardBg = if (showTankhahBadge && account.isTankhah) DashTankhahCardBg else OrosiSurfaceHigh
     val formattedBalance = remember(account.balanceToman) {
         PersianNumberUtils.formatIsolatedAmountRun(account.balanceToman, false)
+    }
+    val logoKey = remember(account.bankName) {
+        com.example.ui.components.JibemanAssetLogoCache.resolveBankLogoKey(account.bankName)
     }
 
     Column(
@@ -1108,7 +1117,8 @@ private fun BankAccountCarouselCard(
             ) {
                 com.example.ui.components.BankLogoAvatar(
                     bankName = account.bankName,
-                    size = 42.dp
+                    size = 40.dp,
+                    preResolvedLogoKey = logoKey
                 )
                 Text(
                     text = account.bankName,
@@ -1185,32 +1195,32 @@ private fun CalmTransactionCardFast(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(DashCardShape20)
             .background(cardBg, DashCardShape20)
             .combinedClickable(
                 onClick = { onTransactionClick(tx) },
                 onLongClick = if (onRowLongClickId != null) { { onRowLongClickId(tx.id) } } else null
             )
-            .padding(horizontal = 14.dp, vertical = 13.dp)
+            .padding(horizontal = 14.dp, vertical = 11.dp)
             .testTag("transaction_item_${tx.id}"),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(11.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         com.example.ui.components.BankLogoAvatar(
             bankName = row.shortBank,
-            size = 42.dp
+            size = 38.dp,
+            preResolvedLogoKey = row.logoKey
         )
 
         Column(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
             Text(
                 text = row.rowTitle,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                fontSize = if (row.isLongTitle) 13.8.sp else 15.sp,
-                lineHeight = 20.sp,
+                fontSize = if (row.isLongTitle) 13.5.sp else 14.5.sp,
+                lineHeight = 19.sp,
                 color = AlabasterSilk,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
@@ -1219,7 +1229,7 @@ private fun CalmTransactionCardFast(
                 text = row.subtitleText,
                 style = MaterialTheme.typography.bodySmall,
                 fontSize = 11.5.sp,
-                lineHeight = 16.sp,
+                lineHeight = 15.sp,
                 color = OrosiOnSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1283,6 +1293,7 @@ fun CalmTransactionCard(
         DashTxRowUi(
             transaction = transaction,
             shortBank = shortBank,
+            logoKey = com.example.ui.components.JibemanAssetLogoCache.resolveBankLogoKey(shortBank),
             rowTitle = rowTitle,
             subtitleText = transaction.simpleSubtitle,
             displayAmountToman = displayAmt,
@@ -1309,31 +1320,32 @@ private fun PulsingTurquoiseMicButton(
     testTag: String
 ) {
     val labelText = if (isIncome) "بگو از کجا اومد؟" else "بگو بابت چی؟"
+    val chipBg = if (isIncome) DashIncomeTagBg else DashExpenseTagBg
+    val chipContentColor = if (isIncome) NishapurTurquoiseSoft else RubyRoseSoft
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),
         modifier = Modifier
             .padding(top = 3.dp)
             .wrapContentWidth(unbounded = false)
-            .clip(DashPillShape12)
-            .background(NishapurTurquoise, DashPillShape12)
+            .background(chipBg, DashPillShape12)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .padding(horizontal = 10.dp, vertical = 5.dp)
             .testTag(testTag)
     ) {
         Icon(
             imageVector = Icons.Default.Mic,
             contentDescription = labelText,
-            tint = AlabasterSilk,
-            modifier = Modifier.size(14.dp)
+            tint = chipContentColor,
+            modifier = Modifier.size(13.dp)
         )
         Text(
             text = labelText,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,
-            fontSize = 12.sp,
-            lineHeight = 16.sp,
-            color = AlabasterSilk,
+            fontSize = 11.5.sp,
+            lineHeight = 15.sp,
+            color = chipContentColor,
             maxLines = 1,
             softWrap = false
         )

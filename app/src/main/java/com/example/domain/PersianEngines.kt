@@ -2326,10 +2326,18 @@ object PersianVoiceSlangParserEngine {
         """(?<=^|\s)(?:خرج\s+کردم|خرجش\s+کردم|خرج\s+کرد|خرج\s+شد|خرج|پرداخت\s+کردم|پرداخت|خریدم|خرید\s+کردم|بخرم|کارت\s+کشیدم|پول\s+دادم|دادم|بدم|هزینه|قسط|اجاره|قبض)(?=\s|$)"""
     )
 
+    private val externalInflowSourcesPattern =
+        """(?:حساب\s+)?(?:صرافی(?:\s+[ء-ۿ\u200C]+){0,2}|آبان\s*تتر|آبان‌تتر|نوبیتکس|والکس|تترلند|بیت‌پین|بیت\s+پین|رمزینکس|اکسکوینو|تبدیل|اوکی\s*اکسچنج|بورس|کارگزاری|صندوق|کیف\s+پول|ولت|طلاین|میلی|دیجی‌پی|دیجی\s+پی|تپسی|اسنپ|تتر|ارز\s+دیجیتال|کریپتو)"""
+
+    private val externalWithdrawalToBankRegex = Regex(
+        """(?<=^|\s)(?:از\s+$externalInflowSourcesPattern\s+(?:[ء-ۿ\u200C]+\s+){0,2}(?:برداشت\s+کردم|برداشتم|کشیدم\s+بیرون|بیرون\s+کشیدم|نقد\s+کردم|تسویه\s+زدم|تسویه\s+کردم)|(?:برداشت\s+کردم|برداشتم|نقد\s+کردم)\s+از\s+$externalInflowSourcesPattern)(?=\s|$)"""
+    )
+
     fun detectVoiceTransactionIsIncome(rawSpeech: String): Boolean {
         val norm = PersianNumberUtils.normalizePersianText(rawSpeech.trim())
         if (norm.isBlank()) return false
         if (incomeSpeechRegex.containsMatchIn(norm)) return true
+        if (externalWithdrawalToBankRegex.containsMatchIn(norm)) return true
         if (nominalIncomeSubjectRegex.containsMatchIn(norm) &&
             !expenseVerbOrMarkerRegex.containsMatchIn(norm) &&
             !norm.contains("از حقوق") &&
@@ -3153,6 +3161,11 @@ object PersianVoiceSlangParserEngine {
         val compoundVavRegex = Regex("""(?<=^|\s)($prefixPattern)\s+و\s+(?=($numWordsPattern)(?=\s|$))""")
         val colloquialMillionVavRegex = Regex("""(?<=^|\s)($leadMillionsPattern|$colloquialMillionLeadDigitPattern)\s+و\s+(?=($hundredsMillionsPattern|[۱-۹1-9][۰-۹0-9]{2})(?=\s|$|،))""")
         val approxTailVavRegex = Regex("""\s+و\s+(?=(?:خورده‌ای|خوردهای|خورده\s+ای|خرده‌ای|خرده\s+ای|خورده)(?=\s|$|،))""")
+        // Protect intra-clause predicate continuations like "... از حسابم برداشت کردم و اومد به حسابم"
+        // so "و اومد به حسابم" stays bound to clause 1 instead of leaking onto the following clause.
+        val predicateContinuationVavRegex = Regex(
+            """\s+و\s+(?=(?:(?:به|تو|توی)\s+(?:حسابم|کارتم|حساب|کارت)\s+)?(?:اومد|آمد|اومده|آمده|ریخته\s+شد|واریز\s+شد|نشست|برگشت)(?:\s+(?:به|تو|توی)\s+(?:حسابم|کارتم|حساب|کارت))?(?=\s|$|،))"""
+        )
 
         var protectedCompoundNums = normalized
         protectedCompoundNums = colloquialMillionVavRegex.replace(protectedCompoundNums) { m ->
@@ -3168,6 +3181,7 @@ object PersianVoiceSlangParserEngine {
             }
         }
         protectedCompoundNums = approxTailVavRegex.replace(protectedCompoundNums, "⟪NUMVAV⟫")
+        protectedCompoundNums = predicateContinuationVavRegex.replace(protectedCompoundNums, "⟪NUMVAV⟫")
 
         // Also split on " که " when it introduces an itemized breakdown (e.g. "امروز ۵۰ هزار تومان خرج کردم که ۲۵ تومنش برای موز بود و ۳۵ تومنش برای بستنی")
         val splitPattern = if (!protectedCompoundNums.contains("دنگ") &&
@@ -3192,8 +3206,13 @@ object PersianVoiceSlangParserEngine {
             afterContrastSplit.addAll(splitOnContrastConjunction(part))
         }
 
-        val afterAsyndetic = mutableListOf<String>()
+        val afterSequentialSplit = mutableListOf<String>()
         for (part in afterContrastSplit) {
+            afterSequentialSplit.addAll(splitOnSequentialConnector(part))
+        }
+
+        val afterAsyndetic = mutableListOf<String>()
+        for (part in afterSequentialSplit) {
             afterAsyndetic.addAll(splitAsyndeticAmountClauses(part))
         }
 
@@ -3202,6 +3221,38 @@ object PersianVoiceSlangParserEngine {
             expanded.addAll(splitOnMidSentenceVerb(part))
         }
         return expanded
+    }
+
+    /**
+     * Splits independent clauses separated by sequential connectors (`بعد`, `بعدش`, `سپس`)
+     * when BOTH sides carry an explicit amount and `بعد` is NOT part of a date phrase (`هفته بعد`, `ماه بعد`, `روز بعد`, `سال بعد`).
+     */
+    private fun splitOnSequentialConnector(clause: String): List<String> {
+        val trimmed = clause.trim()
+        if (trimmed.isBlank() || isNegatedOrCancelledClause(trimmed)) return listOf(trimmed)
+        val seqRegex = Regex("""(?<!(?:هفته|ماه|روز|سال)\s)\s+(?:بعدش|بعد|سپس)\s+""")
+        val matches = seqRegex.findAll(trimmed).toList()
+        if (matches.isEmpty()) return listOf(trimmed)
+
+        val parts = mutableListOf<String>()
+        var startIdx = 0
+        for (m in matches) {
+            val left = trimmed.substring(startIdx, m.range.first).trim()
+            val right = trimmed.substring(m.range.last + 1).trim()
+            if (left.isNotBlank() &&
+                right.isNotBlank() &&
+                !hasHardNegationMarker(left) &&
+                !hasHardNegationMarker(right) &&
+                parseSpokenPersianAmountToman(left) > 0L &&
+                parseSpokenPersianAmountToman(right) > 0L
+            ) {
+                parts.add(left)
+                startIdx = m.range.last + 1
+            }
+        }
+        val tail = trimmed.substring(startIdx).trim()
+        if (tail.isNotBlank()) parts.add(tail)
+        return if (parts.isEmpty()) listOf(trimmed) else parts
     }
 
     /**
@@ -3569,12 +3620,12 @@ object PersianVoiceSlangParserEngine {
             val nextAmount = nextParsed.totalAmountToman
             val hasExpenseVerbInNext = expenseVerbOrMarkerRegex.containsMatchIn(nextPart)
 
-            // If currentParsed is an INCOME clause and nextPart is an EXPENSE clause (e.g. "حقوق من ۵۰ هزار تومان بود و ۲۵ هزار تومانش رو خرج کردم"),
-            // keep them as separate clauses with independent transaction directions!
+            // If currentParsed and nextParsed have different directions (INCOME vs EXPENSE) or different destinations
+            // (commitment vs regular transaction), keep them as separate independent clauses!
             if (currentParsed.totalAmountToman > 0L &&
-                currentParsed.isIncome &&
-                !nextParsed.isIncome &&
                 nextAmount > 0L &&
+                ((currentParsed.isIncome && !nextParsed.isIncome) ||
+                    (currentParsed.isCommitment != nextParsed.isCommitment)) &&
                 (nextParsed.purposeCategory.isNotBlank() || hasExpenseVerbInNext)
             ) {
                 mergedClauses.add(currentClause)
@@ -3789,7 +3840,7 @@ object PersianVoiceSlangParserEngine {
     )
 
     private val futureDebtClauseRegex = Regex(
-        """(?<=^|\s)(?:بدهی\s+دارم|بدهی\s+داریم|بدهکارم|بدهکار\s+هستم|باید\s+بدم|باید\s+بدهم|باید\s+پرداخت\s+کنم|قرض\s+دارم|بدهیم\s+هست|بدهی\s+منه)(?=\s|$)"""
+        """(?<=^|\s)(?:بدهی\s+دارم|بدهی\s+داریم|بدهکارم|بدهکار\s+هستم|باید\s+بدم|باید\s+بدهم|باید\s+پرداخت\s+کنم|قرض\s+دارم|قسط\s+دارم|قسط\s+داریم|اجاره\s+دارم|چک\s+دارم|بدهیم\s+هست|بدهی\s+منه)(?=\s|$)"""
     )
 
     private val futurePlannedPurchaseRegex = Regex(
@@ -4001,6 +4052,20 @@ object PersianVoiceSlangParserEngine {
             corePhrase = corePhrase.replace(saleVerbRegex, " ")
         }
 
+        // Normalize Persian external withdrawal phrases:
+        // e.g. "از حساب صرافی برداشت کردم کامل" -> "برداشت از صرافی"
+        // e.g. "از حسابم برداشت کردم و اومد به حسابم" -> "واریز به حساب"
+        corePhrase = Regex(
+            """(?<=^|\s)از\s+(?:حسابم|کارتم)\s+(?:برداشت\s+کردم|برداشتم)(?:\s+(?:کامل|کاملاً|همش|همه‌اش))?(?=\s|$)"""
+        ).replace(corePhrase, " واریز به حساب ")
+        corePhrase = Regex(
+            """(?<=^|\s)از\s+(?:حساب\s+)?($externalInflowSourcesPattern)\s+(?:برداشت\s+کردم|برداشتم|نقد\s+کردم|کشیدم\s+بیرون|بیرون\s+کشیدم|تسویه\s+زدم|تسویه\s+کردم)(?:\s+(?:کامل|کاملاً|همش|همه‌اش|کلاً))?(?=\s|$)"""
+        ).replace(corePhrase) { m ->
+            val src = m.groupValues[1].removePrefix("حساب ").trim()
+            if (src.isNotBlank()) " برداشت از $src " else " برداشت "
+        }
+        corePhrase = corePhrase.replace(Regex("""(?<=^|\s)(?:کاملاً|کامل)(?=\s|$)"""), " ")
+
         // Normalize colloquial Persian possessive suffix after "خرج" before "شد":
         // e.g. "خرج بستنیش شد" -> "خرج بستنی شد", "خرج کرایه‌اش شد" -> "خرج کرایه شد"
         val preservedIshWords = setOf("آرایش", "نمایش", "آزمایش", "پالایش", "فرمایش", "افزایش", "کاهش", "آسایش", "ستایش")
@@ -4047,6 +4112,7 @@ object PersianVoiceSlangParserEngine {
         val rawPurposeCategory: String
         val detectedBrand = knownBrandsAndStores.firstOrNull { cleaned.contains(it.first) }?.second.orEmpty()
 
+        val preserveSourceNouns = setOf("برداشت", "واریز", "دریافت", "انتقال", "طلب")
         if (explicitMatch != null) {
             val leftPart = trimLeadingPrepositionsAndVav(
                 protectedQuantities.restore(stripGreetingsAndFillers(explicitMatch.groupValues[1]))
@@ -4057,7 +4123,10 @@ object PersianVoiceSlangParserEngine {
             val matchedKnownStore = knownBrandsAndStores.firstOrNull { rightStore.contains(it.first) }?.second
                 ?: rightStore.ifBlank { effectiveBankName }
             storeName = if (isTaggingExistingSms) effectiveBankName else matchedKnownStore
-            rawPurposeCategory = if (isTaggingExistingSms && matchedKnownStore.isNotBlank() && leftPart != matchedKnownStore) {
+            rawPurposeCategory = if ((isTaggingExistingSms || leftPart in preserveSourceNouns) &&
+                matchedKnownStore.isNotBlank() &&
+                leftPart != matchedKnownStore
+            ) {
                 "${leftPart.ifBlank { matchedKnownStore }} از $matchedKnownStore"
             } else {
                 leftPart.ifBlank { matchedKnownStore }

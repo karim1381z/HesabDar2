@@ -1056,55 +1056,77 @@ fun VoiceOverlayBottomSheet(
                             }
                         } else if (hasMixedMulti) {
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(OrosiSurfaceContainer)
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Column(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(NishapurTurquoiseDeep.copy(alpha = 0.55f))
-                                        .padding(10.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    Text(
-                                        text = "جمع دریافتی / طلب",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = NishapurTurquoiseSoft
+                                    Box(
+                                        modifier = Modifier
+                                            .size(7.dp)
+                                            .clip(CircleShape)
+                                            .background(NishapurTurquoiseBright)
                                     )
+                                    Text(
+                                        text = "دریافتی",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = NishapurTurquoiseSoft,
+                                        maxLines = 1
+                                    )
+                                    Spacer(modifier = Modifier.weight(1f))
                                     OrosiAmountText(
                                         amountToman = multiIncomeSum,
                                         color = AlabasterSilk,
-                                        numberStyle = MaterialTheme.typography.titleSmall,
+                                        numberStyle = MaterialTheme.typography.labelLarge,
                                         numberFontWeight = FontWeight.ExtraBold,
                                         unitStyle = MaterialTheme.typography.labelSmall,
-                                        unitColor = NishapurTurquoiseSoft,
+                                        unitColor = NishapurTurquoiseSoft.copy(alpha = 0.85f),
                                         isIncome = true,
-                                        stackedUnit = true
+                                        showUnit = false
                                     )
                                 }
 
-                                Column(
+                                Box(
                                     modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(RubyRose.copy(alpha = 0.22f))
-                                        .padding(10.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                        .width(1.dp)
+                                        .height(18.dp)
+                                        .background(OrosiHairline)
+                                )
+
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    Text(
-                                        text = "جمع پرداختی / تعهد",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = RubyRoseSoft
+                                    Box(
+                                        modifier = Modifier
+                                            .size(7.dp)
+                                            .clip(CircleShape)
+                                            .background(RubyRoseSoft)
                                     )
+                                    Text(
+                                        text = "پرداختی",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = RubyRoseSoft,
+                                        maxLines = 1
+                                    )
+                                    Spacer(modifier = Modifier.weight(1f))
                                     OrosiAmountText(
                                         amountToman = multiExpenseSum,
                                         color = AlabasterSilk,
-                                        numberStyle = MaterialTheme.typography.titleSmall,
+                                        numberStyle = MaterialTheme.typography.labelLarge,
                                         numberFontWeight = FontWeight.ExtraBold,
                                         unitStyle = MaterialTheme.typography.labelSmall,
-                                        unitColor = RubyRoseSoft,
-                                        stackedUnit = true
+                                        unitColor = RubyRoseSoft.copy(alpha = 0.85f),
+                                        showUnit = false
                                     )
                                 }
                             }
@@ -1536,64 +1558,69 @@ private fun VoiceBankSmsMatchStrip(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(14.dp))
                 .background(NishapurTurquoiseDeep.copy(alpha = 0.45f))
-                .padding(horizontal = 11.dp, vertical = 9.dp)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
                 .testTag("voice_sms_match_linked_$testTagSuffix"),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // Row 1: Full-width unwrapped status text (ZERO ellipsis/truncation)
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.weight(1f)
+                Icon(
+                    imageVector = Icons.Default.Sms,
+                    contentDescription = null,
+                    tint = NishapurTurquoiseBright,
+                    modifier = Modifier
+                        .padding(top = 2.dp)
+                        .size(16.dp)
+                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Sms,
-                        contentDescription = null,
-                        tint = NishapurTurquoiseBright,
-                        modifier = Modifier.size(15.dp)
+                    Text(
+                        text = if (isApproxAuto) {
+                            "تطبیق تقریبی با پیامک ${linkedCandidate.bankName} • $whenStr"
+                        } else {
+                            "تطبیق با پیامک ${linkedCandidate.bankName} • $whenStr"
+                        },
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            lineHeight = 18.sp
+                        ),
+                        color = NishapurTurquoiseSoft
                     )
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    if (!isExact) {
                         Text(
-                            text = if (isApproxAuto) {
-                                "تطبیق تقریبی با پیامک ${linkedCandidate.bankName} • $whenStr"
-                            } else {
-                                "تطبیق با پیامک ${linkedCandidate.bankName} • $whenStr"
-                            },
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                            color = NishapurTurquoiseSoft,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            text = "مبلغ دقیق بانک (${PersianNumberUtils.formatToman(linkedCandidate.amountToman, showUnit = true)}) حفظ می‌شود",
+                            style = MaterialTheme.typography.labelSmall.copy(lineHeight = 17.sp),
+                            color = AlabasterSilk.copy(alpha = 0.88f)
                         )
-                        if (!isExact) {
-                            Text(
-                                text = "مبلغ دقیق بانک (${PersianNumberUtils.formatToman(linkedCandidate.amountToman, showUnit = true)}) حفظ می‌شود",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = AlabasterSilk.copy(alpha = 0.85f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
                     }
                 }
-                Spacer(modifier = Modifier.width(8.dp))
+            }
+
+            // Row 2: Dedicated action bar (never squeezes text above)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
                 Surface(
                     onClick = { onSetMatchedTxId(null) },
                     shape = RoundedCornerShape(10.dp),
                     color = OrosiSurfaceContainer,
                     modifier = Modifier
-                        .heightIn(min = 36.dp)
+                        .heightIn(min = 34.dp)
                         .testTag("voice_unlink_sms_$testTagSuffix")
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,
@@ -1621,10 +1648,10 @@ private fun VoiceBankSmsMatchStrip(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(OrosiSurfaceLow.copy(alpha = 0.85f))
-            .padding(horizontal = 11.dp, vertical = 9.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
             text = if (isRelink) {
@@ -1632,10 +1659,8 @@ private fun VoiceBankSmsMatchStrip(
             } else {
                 "ثبت به عنوان نقدی جدید • پیامک بانکی اخیر پیدا شد:"
             },
-            style = MaterialTheme.typography.labelSmall,
-            color = OrosiOnSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            style = MaterialTheme.typography.labelSmall.copy(lineHeight = 17.sp),
+            color = OrosiOnSurfaceVariant
         )
         Surface(
             onClick = { onSetMatchedTxId(relinkOrSuggest.id) },
@@ -1649,7 +1674,7 @@ private fun VoiceBankSmsMatchStrip(
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.Sms,
@@ -1664,10 +1689,11 @@ private fun VoiceBankSmsMatchStrip(
                     } else {
                         "اتصال به پیامک ${relinkOrSuggest.bankName} (${PersianNumberUtils.formatToman(relinkOrSuggest.amountToman)} • $whenStr)"
                     },
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                    color = NishapurTurquoiseSoft,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        lineHeight = 18.sp
+                    ),
+                    color = NishapurTurquoiseSoft
                 )
             }
         }

@@ -1185,6 +1185,59 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun testExternalExchangeWithdrawalsAndPredicateContinuationV25() {
+        // 1. Video 4 exact sentence: external exchange withdrawal + "و بعد" sequential split
+        val video4 = "من یک و صد و خورده‌ای از حساب صرافی برداشت کردم کامل و بعد ۵۰۰ تومن بدهی تارا رو دادم"
+        val v4Items = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(video4)
+        assertEquals(2, v4Items.size)
+        assertEquals(true, v4Items[0].isIncome)
+        assertEquals(false, v4Items[0].isCommitment)
+        assertEquals(1_100_000L, v4Items[0].totalAmountToman)
+        assertEquals(true, v4Items[0].isApproximateAmount)
+        assertEquals("برداشت از صرافی", v4Items[0].purposeCategory)
+
+        assertEquals(false, v4Items[1].isIncome)
+        assertEquals(false, v4Items[1].isCommitment)
+        assertEquals(500_000L, v4Items[1].totalAmountToman)
+        assertEquals(true, v4Items[1].purposeCategory.contains("تارا"))
+
+        // 2. Video 1 exact sentence: predicate continuation "برداشت کردم و اومد به حسابم" + "بعد ۵۰۰ تومن خرج تارا کردم"
+        val video1 = "سلام من یک و صد و خورده‌ای از حسابم برداشت کردم و اومد به حسابم بعد ۵۰۰ تومن خرج تارا کردم"
+        val v1Items = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(video1)
+        assertEquals(2, v1Items.size)
+        assertEquals(true, v1Items[0].isIncome)
+        assertEquals(1_100_000L, v1Items[0].totalAmountToman)
+        assertEquals(true, v1Items[0].isApproximateAmount)
+        assertEquals("واریز به حساب", v1Items[0].purposeCategory)
+
+        assertEquals(false, v1Items[1].isIncome)
+        assertEquals(500_000L, v1Items[1].totalAmountToman)
+        assertEquals("تارا", v1Items[1].purposeCategory)
+
+        // 3. Generalized external wallets/exchanges -> INCOME
+        val nobitex = PersianVoiceSlangParserEngine.parseVoiceCommand("۲ و ۵۰۰ از نوبیتکس برداشت کردم")
+        assertEquals(true, nobitex.isIncome)
+        assertEquals(2_500_000L, nobitex.totalAmountToman)
+        assertEquals(true, nobitex.purposeCategory.contains("نوبیتکس"))
+
+        val digipay = PersianVoiceSlangParserEngine.parseVoiceCommand("۳۰۰ تومن از کیف پول دیجی‌پی برداشت کردم")
+        assertEquals(true, digipay.isIncome)
+        assertEquals(300_000L, digipay.totalAmountToman)
+        assertEquals(true, digipay.purposeCategory.contains("دیجی‌پی"))
+
+        // 4. ATM withdrawal guard -> stays EXPENSE
+        val atm = PersianVoiceSlangParserEngine.parseVoiceCommand("۵۰۰ تومن از عابربانک برداشت کردم")
+        assertEquals(false, atm.isIncome)
+        assertEquals(500_000L, atm.totalAmountToman)
+
+        // 5. Relative date phrase guard ("ماه بعد" / "هفته بعد") does NOT falsely split
+        val nextMonth = PersianVoiceSlangParserEngine.parseMultiVoiceCommands("ماه بعد ۲ میلیون قسط دارم و ۵۰۰ تومن خرج کردم")
+        assertEquals(2, nextMonth.size)
+        assertEquals(2_000_000L, nextMonth[0].totalAmountToman)
+        assertEquals(500_000L, nextMonth[1].totalAmountToman)
+    }
+
+    @Test
     fun testFullOrosiRegressionAndStressSuitePasses100Percent() {
         val report = com.example.domain.OrosiRegressionSuite.runFullRegressionAndStressSuite()
         for (r in report.results) {
@@ -1196,8 +1249,8 @@ class ExampleUnitTest {
         }
         assertEquals(true, report.allPassed)
         assertEquals(com.example.domain.OrosiRegressionSuite.EXPECTED_TOTAL_CASES, report.totalCount)
-        assertEquals(60, report.totalCount)
-        assertEquals(60, report.passedCount)
+        assertEquals(66, report.totalCount)
+        assertEquals(66, report.passedCount)
     }
 }
 

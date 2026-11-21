@@ -3,7 +3,6 @@ package com.example.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,7 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -32,9 +31,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,23 +41,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.runtime.Immutable
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import com.example.data.local.TransactionEntity
 import com.example.domain.JalaliCalendarUtils
 import com.example.domain.PersianNumberUtils
+import com.example.ui.components.BankLogoAvatar
+import com.example.ui.components.JibemanAssetLogoCache
 import com.example.ui.components.OrosiAmountText
 import com.example.ui.theme.AlabasterSilk
-import com.example.ui.theme.NishapurTurquoise
 import com.example.ui.theme.NishapurTurquoiseBright
 import com.example.ui.theme.NishapurTurquoiseDeep
 import com.example.ui.theme.NishapurTurquoiseSoft
@@ -66,7 +66,6 @@ import com.example.ui.theme.OrosiHairline
 import com.example.ui.theme.OrosiOnSurfaceVariant
 import com.example.ui.theme.OrosiSurfaceContainer
 import com.example.ui.theme.OrosiSurfaceHigh
-import com.example.ui.theme.PersianLapis
 import com.example.ui.theme.PersianLapisLight
 import com.example.ui.theme.RubyRose
 import com.example.ui.theme.RubyRoseSoft
@@ -77,21 +76,34 @@ private val jalaliMonthNames = arrayOf(
     "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"
 )
 
-// Hoisted static shapes and colors for zero per-frame allocations during 120Hz scrolling
+// Hoisted static shapes and colors matching the HeroMathBreakdownBottomSheet North Star (zero per-frame allocations)
 private val TxCardShape20 = RoundedCornerShape(20.dp)
-private val TxCardShape18 = RoundedCornerShape(18.dp)
+private val TxGroupSingleShape: Shape = RoundedCornerShape(20.dp)
+private val TxGroupTopShape: Shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+private val TxGroupMiddleShape: Shape = RectangleShape
+private val TxGroupBottomShape: Shape = RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp)
 private val TxMicPillShape10 = RoundedCornerShape(10.dp)
 private val TxUntaggedRowBg = Color(0xFF102432)
-private val TxIncomeCardBg = NishapurTurquoiseDeep.copy(alpha = 0.45f)
-private val TxExpenseCardBg = RubyRose.copy(alpha = 0.16f)
-private val TxUnitIncomeColor = NishapurTurquoiseBright.copy(alpha = 0.82f)
-private val TxUnitExpenseColor = RubyRoseSoft.copy(alpha = 0.82f)
-private val TxUnitMutedColor = OrosiOnSurfaceVariant.copy(alpha = 0.82f)
+private val TxIncomeCardBg = NishapurTurquoiseDeep.copy(alpha = 0.52f)
+private val TxIncomeIconBg = NishapurTurquoiseBright.copy(alpha = 0.20f)
+private val TxExpenseCardBg = RubyRose.copy(alpha = 0.18f)
+private val TxExpenseIconBg = RubyRoseSoft.copy(alpha = 0.18f)
+private val TxIncomeTagBg = NishapurTurquoiseDeep.copy(alpha = 0.72f)
+private val TxExpenseTagBg = RubyRose.copy(alpha = 0.22f)
+private val TxDividerColor = OrosiHairline.copy(alpha = 0.45f)
+private val TxUnitIncomeColor = NishapurTurquoiseSoft.copy(alpha = 0.80f)
+private val TxUnitExpenseColor = RubyRoseSoft.copy(alpha = 0.80f)
+private val TxUnitMutedColor = OrosiOnSurfaceVariant.copy(alpha = 0.80f)
+
+private enum class RowGroupPosition {
+    SINGLE, FIRST, MIDDLE, LAST
+}
 
 @Immutable
 private data class GroupedTxRowUi(
     val transaction: TransactionEntity,
     val shortBank: String,
+    val logoKey: String?,
     val metaLabel: String,
     val isIncome: Boolean,
     val accentColor: Color,
@@ -99,8 +111,9 @@ private data class GroupedTxRowUi(
     val displayAmountToman: Long,
     val formattedAmountRun: String,
     val hasCustomNote: Boolean,
-    val noteText: String,
-    val isLongNote: Boolean
+    val primaryTitle: String,
+    val isLongTitle: Boolean,
+    val groupPosition: RowGroupPosition
 )
 
 @Immutable
@@ -136,9 +149,6 @@ fun TransactionsScreen(
     val monthName = jalaliMonthNames[selectedMonth - 1]
     val monthHeaderLabel = "$monthName ${PersianNumberUtils.toPersianDigits(selectedYear.toString())}"
 
-    // Strictly filter by BOTH jalaliMonth == selectedMonth AND jalaliYear == selectedYear
-    // computed from timestampMillis via JalaliCalendarUtils.timestampToJalali(timestampMillis),
-    // and ALWAYS sort filteredTransactions by it.timestampMillis DESC before calling .groupBy { it.jalaliDate }!
     val filteredTransactions = remember(transactions, selectedYear, selectedMonth) {
         transactions
             .filter { tx ->
@@ -159,7 +169,8 @@ fun TransactionsScreen(
         filteredTransactions.filter { it.type == "EXPENSE" }.sumOf { it.totalAmountToman }
     }
 
-    // Group strictly after sorting by timestampMillis DESC so date headers are chronological from newest to oldest
+    // Group strictly after sorting by timestampMillis DESC so date headers are chronological newest -> oldest.
+    // Each row stays an independent LazyColumn item with precomputed groupPosition for 120Hz recycling.
     val sortedDayGroups = remember(filteredTransactions) {
         filteredTransactions
             .groupBy { it.jalaliDate }
@@ -174,7 +185,8 @@ fun TransactionsScreen(
                 val netSum = sortedDayTxs.sumOf { tx ->
                     if (tx.type == "INCOME") tx.totalAmountToman else -tx.totalAmountToman
                 }
-                val rowModels = sortedDayTxs.map { tx ->
+                val lastIdx = sortedDayTxs.lastIndex
+                val rowModels = sortedDayTxs.mapIndexed { idx, tx ->
                     val isIncome = tx.type == "INCOME"
                     val shortBank = tx.shortBankName
                     val hasCustomNote = !tx.isUntagged &&
@@ -183,26 +195,44 @@ fun TransactionsScreen(
                         tx.purpose != "برداشت کارتی / خرید" &&
                         tx.purpose != "افزایش موجودی حساب" &&
                         tx.purpose != "واریز به حساب"
-                    val noteText = if (hasCustomNote) {
-                        tx.title.ifBlank { tx.displayTitle }
-                    } else if (tx.isUntagged) {
-                        if (isIncome) "واریز به کارت ($shortBank)" else "خرید کارتی ($shortBank)"
-                    } else {
-                        tx.title
+                    val primaryTitle = when {
+                        hasCustomNote -> tx.title.ifBlank { tx.displayTitle }
+                        tx.isUntagged -> if (isIncome) "واریز به کارت" else "خرید کارتی"
+                        else -> tx.title.ifBlank { tx.displayTitle }
                     }
                     val dispAmt = tx.userShareToman.takeIf { it > 0L } ?: tx.totalAmountToman
+                    val position = when {
+                        lastIdx == 0 -> RowGroupPosition.SINGLE
+                        idx == 0 -> RowGroupPosition.FIRST
+                        idx == lastIdx -> RowGroupPosition.LAST
+                        else -> RowGroupPosition.MIDDLE
+                    }
+                    val amountColor = when (tx.type) {
+                        "INCOME" -> NishapurTurquoiseSoft
+                        "GOLD_SAVE" -> SaffronGoldLight
+                        "SELF_TRANSFER" -> OrosiOnSurfaceVariant
+                        else -> RubyRoseSoft
+                    }
+                    val uColor = when (tx.type) {
+                        "INCOME" -> TxUnitIncomeColor
+                        "GOLD_SAVE" -> SaffronGoldLight.copy(alpha = 0.80f)
+                        "SELF_TRANSFER" -> TxUnitMutedColor
+                        else -> TxUnitExpenseColor
+                    }
                     GroupedTxRowUi(
                         transaction = tx,
                         shortBank = shortBank,
+                        logoKey = JibemanAssetLogoCache.resolveBankLogoKey(shortBank),
                         metaLabel = if (tx.timeStr.isNotBlank()) "$shortBank • ${tx.timeStr}" else shortBank,
                         isIncome = isIncome,
-                        accentColor = if (isIncome) NishapurTurquoiseBright else RubyRoseSoft,
-                        unitColor = if (isIncome) TxUnitIncomeColor else TxUnitExpenseColor,
+                        accentColor = amountColor,
+                        unitColor = uColor,
                         displayAmountToman = dispAmt,
                         formattedAmountRun = PersianNumberUtils.formatIsolatedAmountRun(dispAmt, isIncome),
                         hasCustomNote = hasCustomNote,
-                        noteText = noteText,
-                        isLongNote = noteText.length > 24
+                        primaryTitle = primaryTitle,
+                        isLongTitle = primaryTitle.length > 22,
+                        groupPosition = position
                     )
                 }
                 DayTransactionGroup(
@@ -219,33 +249,32 @@ fun TransactionsScreen(
     var activeDeleteConfirmId by remember { mutableStateOf<Long?>(null) }
     val onRowLongClickForId = remember { { id: Long -> activeDeleteConfirmId = id } }
     val onClearDeleteConfirm = remember { { _: Long -> activeDeleteConfirmId = null } }
+    val shimmerBrush = if (isLoadingSelectedMonth) orosiShimmerBrush() else null
 
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
             .testTag("transactions_screen"),
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(0.dp)
     ) {
-        // 1. Month Selector Header: right (>) goes to previous month, left (<) goes to next month (disabled on current month)
+        // 1. Minimalist Borderless Month Selector matching North Star calm aesthetic
         item(key = "month_selector_header", contentType = "month_selector") {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(OrosiSurfaceHigh, TxCardShape20)
-                    .border(1.dp, OrosiHairline, TxCardShape20)
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .background(OrosiSurfaceContainer, TxCardShape20)
+                    .padding(horizontal = 10.dp, vertical = 7.dp)
                     .testTag("month_selector_header"),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // RIGHT side button in RTL: points RIGHT (>) -> Previous month
-                Surface(
-                    shape = CircleShape,
-                    color = OrosiSurfaceContainer,
+                Box(
+                    contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .size(40.dp)
-                        .border(1.dp, PersianLapisLight.copy(alpha = 0.35f), CircleShape)
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(OrosiSurfaceHigh)
                 ) {
                     IconButton(
                         onClick = { onChangeMonth(-1) },
@@ -256,28 +285,29 @@ fun TransactionsScreen(
                         Icon(
                             imageVector = Icons.Default.ChevronRight,
                             contentDescription = "ماه قبل",
-                            tint = AlabasterSilk
+                            tint = AlabasterSilk,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
 
                 Text(
                     text = monthHeaderLabel,
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold),
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 16.5.sp
+                    ),
                     color = AlabasterSilk,
                     modifier = Modifier.testTag("selected_month_label")
                 )
 
-                // LEFT side button in RTL: points LEFT (<) -> Next month (disabled & dimmed when on current month)
-                Surface(
-                    shape = CircleShape,
-                    color = if (canGoNextMonth) OrosiSurfaceContainer else OrosiSurfaceContainer.copy(alpha = 0.38f),
+                Box(
+                    contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .size(40.dp)
-                        .border(
-                            1.dp,
-                            if (canGoNextMonth) PersianLapisLight.copy(alpha = 0.35f) else OrosiHairline.copy(alpha = 0.35f),
-                            CircleShape
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (canGoNextMonth) OrosiSurfaceHigh else OrosiSurfaceHigh.copy(alpha = 0.35f)
                         )
                 ) {
                     IconButton(
@@ -290,26 +320,26 @@ fun TransactionsScreen(
                         Icon(
                             imageVector = Icons.Default.ChevronLeft,
                             contentDescription = "ماه بعد",
-                            tint = if (canGoNextMonth) AlabasterSilk else OrosiOnSurfaceVariant.copy(alpha = 0.3f)
+                            tint = if (canGoNextMonth) AlabasterSilk else OrosiOnSurfaceVariant.copy(alpha = 0.30f),
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
             }
+            Spacer(modifier = Modifier.height(12.dp))
         }
 
-        // 2. Two Calm Read-Only KPI Summary Panels (borderless tonal surfaces — clearly non-clickable)
+        // 2. Minimalist 2-Column Monthly Inflow/Outflow Header (exact HeroMathBreakdownBottomSheet North Star grammar)
         item(key = "monthly_summary_cards", contentType = "month_summary") {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // دریافتی ماه (سبز / فیروزه‌ای)
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(TxCardShape20)
                         .background(TxIncomeCardBg, TxCardShape20)
-                        .padding(16.dp)
+                        .padding(horizontal = 14.dp, vertical = 13.dp)
                         .testTag("monthly_income_summary_card"),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -317,16 +347,25 @@ fun TransactionsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.ArrowDownward,
-                            contentDescription = null,
-                            tint = NishapurTurquoiseBright,
-                            modifier = Modifier.size(16.dp)
-                        )
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(CircleShape)
+                                .background(TxIncomeIconBg)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.ArrowDownward,
+                                contentDescription = null,
+                                tint = NishapurTurquoiseBright,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
                         Text(
                             text = "دریافتی ماه",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = NishapurTurquoiseSoft
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            color = NishapurTurquoiseSoft,
+                            maxLines = 1
                         )
                     }
                     OrosiAmountText(
@@ -336,18 +375,17 @@ fun TransactionsScreen(
                         numberFontWeight = FontWeight.ExtraBold,
                         unitStyle = MaterialTheme.typography.labelSmall,
                         unitColor = NishapurTurquoiseSoft,
+                        isIncome = monthlyIncomeToman > 0L,
                         hideAmount = hideAmounts,
                         stackedUnit = true
                     )
                 }
 
-                // پرداختی ماه (کهربایی / قرمز ملایم)
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(TxCardShape20)
                         .background(TxExpenseCardBg, TxCardShape20)
-                        .padding(16.dp)
+                        .padding(horizontal = 14.dp, vertical = 13.dp)
                         .testTag("monthly_expense_summary_card"),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -355,16 +393,25 @@ fun TransactionsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.ArrowUpward,
-                            contentDescription = null,
-                            tint = RubyRoseSoft,
-                            modifier = Modifier.size(16.dp)
-                        )
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(CircleShape)
+                                .background(TxExpenseIconBg)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.ArrowUpward,
+                                contentDescription = null,
+                                tint = RubyRoseSoft,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
                         Text(
                             text = "پرداختی ماه",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = RubyRoseSoft
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            color = RubyRoseSoft,
+                            maxLines = 1
                         )
                     }
                     OrosiAmountText(
@@ -379,15 +426,16 @@ fun TransactionsScreen(
                     )
                 }
             }
+            Spacer(modifier = Modifier.height(6.dp))
         }
 
-        if (isLoadingSelectedMonth) {
+        if (isLoadingSelectedMonth && shimmerBrush != null) {
             item(key = "month_loading_banner", contentType = "loading_banner") {
+                Spacer(modifier = Modifier.height(10.dp))
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(OrosiSurfaceHigh, TxCardShape18)
-                        .border(1.dp, NishapurTurquoiseBright.copy(alpha = 0.45f), TxCardShape18)
+                        .background(OrosiSurfaceHigh, TxCardShape20)
                         .padding(horizontal = 16.dp, vertical = 14.dp)
                         .testTag("month_loading_shimmer"),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -407,18 +455,21 @@ fun TransactionsScreen(
                             .clip(RoundedCornerShape(50))
                     )
                 }
+                Spacer(modifier = Modifier.height(10.dp))
             }
             items(4, key = { "month_shimmer_row_$it" }, contentType = { "shimmer_row" }) {
-                val shimmerBrush = orosiShimmerBrush()
-                TransactionRowSkeletonShimmer(shimmerBrush = shimmerBrush)
+                TransactionRowSkeletonShimmer(
+                    shimmerBrush = shimmerBrush,
+                    modifier = Modifier.padding(bottom = 10.dp)
+                )
             }
         } else if (sortedDayGroups.isEmpty()) {
             item(key = "empty_month_card", contentType = "empty_state") {
+                Spacer(modifier = Modifier.height(14.dp))
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(OrosiSurfaceContainer, TxCardShape20)
-                        .border(1.dp, OrosiHairline, TxCardShape20)
                         .padding(28.dp)
                         .testTag("empty_month_transactions_card"),
                     horizontalAlignment = Alignment.CenterHorizontally
@@ -433,7 +484,7 @@ fun TransactionsScreen(
                 }
             }
         } else {
-            // 3. Transactions Grouped by Jalali Date Headers sorted newest day first (timestampMillis DESC)
+            // 3. Compact Grouped Daily Ledger Sheets — each row is an independent LazyColumn item for 120Hz fluidity
             sortedDayGroups.forEach { dayGroup ->
                 item(key = "header_${dayGroup.dateSortKey}", contentType = "day_header") {
                     val dayNetColor = when {
@@ -441,7 +492,6 @@ fun TransactionsScreen(
                         dayGroup.dayNetSumToman > 0L -> NishapurTurquoiseSoft
                         else -> OrosiOnSurfaceVariant
                     }
-
                     val dayNetUnitColor = when {
                         dayGroup.dayNetSumToman < 0L -> TxUnitExpenseColor
                         dayGroup.dayNetSumToman > 0L -> TxUnitIncomeColor
@@ -451,15 +501,15 @@ fun TransactionsScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 8.dp, bottom = 2.dp),
+                            .padding(top = 16.dp, bottom = 7.dp, start = 4.dp, end = 4.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
                             text = dayGroup.dateHeaderLabel,
-                            style = MaterialTheme.typography.titleSmall,
+                            style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.ExtraBold,
-                            fontSize = 14.sp,
+                            fontSize = 13.5.sp,
                             color = PersianLapisLight
                         )
                         OrosiAmountText(
@@ -471,7 +521,7 @@ fun TransactionsScreen(
                             unitColor = dayNetUnitColor,
                             isIncome = dayGroup.dayNetSumToman > 0L,
                             hideAmount = hideAmounts,
-                            prefixText = if (!hideAmounts && dayGroup.dayNetSumToman < 0L) "پرداختی" else null,
+                            prefixText = if (!hideAmounts && dayGroup.dayNetSumToman < 0L) "خالص" else null,
                             preformattedNumberRun = dayGroup.formattedDayNetRun,
                             modifier = Modifier.testTag("day_net_sum_${dayGroup.dateSortKey}")
                         )
@@ -493,7 +543,7 @@ fun TransactionsScreen(
                             },
                             onCancel = { activeDeleteConfirmId = null }
                         ) {
-                            JibemanGroupedTransactionRow(
+                            CompactGroupedLedgerRow(
                                 row = row,
                                 hideAmounts = hideAmounts,
                                 onTransactionClick = onTransactionClick,
@@ -502,7 +552,7 @@ fun TransactionsScreen(
                             )
                         }
                     } else {
-                        JibemanGroupedTransactionRow(
+                        CompactGroupedLedgerRow(
                             row = row,
                             hideAmounts = hideAmounts,
                             onTransactionClick = onTransactionClick,
@@ -518,7 +568,7 @@ fun TransactionsScreen(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun JibemanGroupedTransactionRow(
+private fun CompactGroupedLedgerRow(
     row: GroupedTxRowUi,
     hideAmounts: Boolean,
     onTransactionClick: (TransactionEntity) -> Unit,
@@ -527,97 +577,113 @@ private fun JibemanGroupedTransactionRow(
 ) {
     val tx = row.transaction
     val cardBg = if (tx.isUntagged) TxUntaggedRowBg else OrosiSurfaceContainer
+    val rowShape = when (row.groupPosition) {
+        RowGroupPosition.SINGLE -> TxGroupSingleShape
+        RowGroupPosition.FIRST -> TxGroupTopShape
+        RowGroupPosition.MIDDLE -> TxGroupMiddleShape
+        RowGroupPosition.LAST -> TxGroupBottomShape
+    }
+    val drawBottomDivider = row.groupPosition == RowGroupPosition.FIRST || row.groupPosition == RowGroupPosition.MIDDLE
 
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(TxCardShape18)
-            .background(cardBg, TxCardShape18)
+            .background(cardBg, rowShape)
+            .drawBehind {
+                if (drawBottomDivider) {
+                    val strokePx = 0.75.dp.toPx()
+                    val insetPx = 14.dp.toPx()
+                    drawLine(
+                        color = TxDividerColor,
+                        start = Offset(insetPx, size.height - strokePx * 0.5f),
+                        end = Offset(size.width - insetPx, size.height - strokePx * 0.5f),
+                        strokeWidth = strokePx
+                    )
+                }
+            }
             .combinedClickable(
                 onClick = { onTransactionClick(tx) },
                 onLongClick = if (onRowLongClickId != null) { { onRowLongClickId(tx.id) } } else null
             )
-            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .padding(horizontal = 14.dp, vertical = 11.dp)
             .testTag("grouped_tx_${tx.id}"),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(11.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
+        BankLogoAvatar(
+            bankName = row.shortBank,
+            size = 38.dp,
+            preResolvedLogoKey = row.logoKey
+        )
+
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            com.example.ui.components.BankLogoAvatar(
-                bankName = row.shortBank,
-                size = 40.dp
+            Text(
+                text = row.primaryTitle,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = if (row.hasCustomNote) FontWeight.Bold else FontWeight.SemiBold,
+                fontSize = if (row.isLongTitle) 13.sp else 14.sp,
+                lineHeight = 18.sp,
+                color = if (row.hasCustomNote) AlabasterSilk else AlabasterSilk.copy(alpha = 0.90f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
 
             Text(
                 text = row.metaLabel,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.labelSmall,
+                fontSize = 11.5.sp,
                 color = OrosiOnSurfaceVariant,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-
-            OrosiAmountText(
-                amountToman = row.displayAmountToman,
-                color = row.accentColor,
-                numberStyle = MaterialTheme.typography.titleSmall,
-                numberFontWeight = FontWeight.ExtraBold,
-                unitStyle = MaterialTheme.typography.labelSmall,
-                unitColor = row.unitColor,
-                isIncome = row.isIncome,
-                hideAmount = hideAmounts,
-                preformattedNumberRun = row.formattedAmountRun
-            )
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = row.noteText,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (row.hasCustomNote) FontWeight.Bold else FontWeight.Normal,
-                fontSize = if (row.isLongNote) 13.sp else 14.sp,
-                lineHeight = 19.sp,
-                color = if (row.hasCustomNote) SaffronGoldLight else OrosiOnSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
+                overflow = TextOverflow.Ellipsis
             )
 
             if (tx.isUntagged) {
                 val untaggedBtnLabel = if (row.isIncome) "بگو از کجا اومد؟" else "بگو بابت چی؟"
+                val tagBg = if (row.isIncome) TxIncomeTagBg else TxExpenseTagBg
+                val tagContentColor = if (row.isIncome) NishapurTurquoiseSoft else RubyRoseSoft
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier
-                        .clip(TxMicPillShape10)
-                        .background(NishapurTurquoise, TxMicPillShape10)
+                        .padding(top = 2.dp)
+                        .wrapContentWidth(unbounded = false)
+                        .background(tagBg, TxMicPillShape10)
                         .clickable { onUntaggedMicClick(tx) }
-                        .padding(horizontal = 9.dp, vertical = 6.dp)
+                        .padding(horizontal = 9.dp, vertical = 5.dp)
+                        .testTag("untagged_mic_button_${tx.id}")
                 ) {
                     Icon(
                         imageVector = Icons.Default.Mic,
                         contentDescription = untaggedBtnLabel,
-                        tint = AlabasterSilk,
-                        modifier = Modifier.size(13.dp)
+                        tint = tagContentColor,
+                        modifier = Modifier.size(12.5.dp)
                     )
                     Text(
                         text = untaggedBtnLabel,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
-                        color = AlabasterSilk,
+                        fontSize = 11.5.sp,
+                        color = tagContentColor,
                         maxLines = 1,
                         softWrap = false
                     )
                 }
             }
         }
+
+        OrosiAmountText(
+            amountToman = row.displayAmountToman,
+            color = row.accentColor,
+            numberStyle = MaterialTheme.typography.titleSmall,
+            numberFontWeight = FontWeight.ExtraBold,
+            unitStyle = MaterialTheme.typography.labelSmall,
+            unitColor = row.unitColor,
+            isIncome = row.isIncome,
+            hideAmount = hideAmounts,
+            preformattedNumberRun = row.formattedAmountRun
+        )
     }
 }

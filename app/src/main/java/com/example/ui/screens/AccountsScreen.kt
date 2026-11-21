@@ -2,7 +2,6 @@ package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,11 +17,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.Savings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -31,11 +32,12 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -44,20 +46,44 @@ import androidx.compose.ui.unit.sp
 import com.example.data.local.BankAccountEntity
 import com.example.domain.JalaliCalendarUtils
 import com.example.domain.PersianNumberUtils
+import com.example.ui.components.BankLogoAvatar
+import com.example.ui.components.JibemanAssetLogoCache
+import com.example.ui.components.OrosiAmountText
 import com.example.ui.theme.AlabasterSilk
 import com.example.ui.theme.NishapurTurquoise
 import com.example.ui.theme.NishapurTurquoiseBright
 import com.example.ui.theme.NishapurTurquoiseDeep
 import com.example.ui.theme.NishapurTurquoiseSoft
-import com.example.ui.theme.OrosiHairline
 import com.example.ui.theme.OrosiOnSurfaceVariant
 import com.example.ui.theme.OrosiSurfaceContainer
 import com.example.ui.theme.OrosiSurfaceHigh
 import com.example.ui.theme.PersianLapis
-import com.example.ui.theme.PersianLapisDeep
-import com.example.ui.theme.PersianLapisGlow
 import com.example.ui.theme.PersianLapisLight
+import com.example.ui.theme.SaffronGoldBright
 import com.example.ui.theme.SaffronGoldLight
+
+// Hoisted static shapes and colors matching the HeroMathBreakdownBottomSheet North Star
+private val AccCardShape20 = RoundedCornerShape(20.dp)
+private val AccSubPillShape14 = RoundedCornerShape(14.dp)
+private val AccBtnShape18 = RoundedCornerShape(18.dp)
+private val AccHeroCardBg = NishapurTurquoiseDeep.copy(alpha = 0.52f)
+private val AccHeroIconBg = NishapurTurquoiseBright.copy(alpha = 0.20f)
+private val AccSavingsCardBg = PersianLapis.copy(alpha = 0.55f)
+private val AccSavingsIconBg = SaffronGoldBright.copy(alpha = 0.18f)
+private val AccTankhahRowBg = Color(0xFF112936)
+private val AccUnitTurquoise = NishapurTurquoiseSoft.copy(alpha = 0.80f)
+private val AccUnitGold = SaffronGoldLight.copy(alpha = 0.80f)
+
+@Immutable
+private data class AccountRowUi(
+    val account: BankAccountEntity,
+    val logoKey: String?,
+    val titleText: String,
+    val shortSourceDateLabel: String,
+    val formattedBalanceRun: String,
+    val balanceColor: Color,
+    val unitColor: Color
+)
 
 @Composable
 fun AccountsScreen(
@@ -73,141 +99,212 @@ fun AccountsScreen(
 ) {
     BackHandler(onBack = onBackToHome)
 
-    val totalAllAccountsToman = bankAccounts
-        .sumOf { it.balanceToman.coerceAtLeast(0L) }
-    val tankhahAccountsToman = bankAccounts
-        .filter { it.isTankhah }
-        .sumOf { it.balanceToman.coerceAtLeast(0L) }
-    val nonTankhahAccountsToman = bankAccounts
-        .filter { !it.isTankhah }
-        .sumOf { it.balanceToman.coerceAtLeast(0L) }
+    val currentJalaliYear = remember {
+        JalaliCalendarUtils.fromTimestamp(System.currentTimeMillis()).year
+    }
+
+    val totalAllAccountsToman = remember(bankAccounts) {
+        bankAccounts.sumOf { it.balanceToman.coerceAtLeast(0L) }
+    }
+    val tankhahAccountsToman = remember(bankAccounts) {
+        bankAccounts.filter { it.isTankhah }.sumOf { it.balanceToman.coerceAtLeast(0L) }
+    }
+    val nonTankhahAccountsToman = remember(bankAccounts) {
+        bankAccounts.filter { !it.isTankhah }.sumOf { it.balanceToman.coerceAtLeast(0L) }
+    }
+
+    val accountRows = remember(bankAccounts, currentJalaliYear) {
+        bankAccounts.map { account ->
+            val updatedJalali = JalaliCalendarUtils.fromTimestamp(account.lastUpdatedTimestamp)
+            val shortDate = if (updatedJalali.year == currentJalaliYear) {
+                "${PersianNumberUtils.toPersianDigits(updatedJalali.day.toString())} ${updatedJalali.monthName}"
+            } else {
+                updatedJalali.dateWithYear
+            }
+            val sourcePrefix = if (account.isManual) "دستی" else "پیامک"
+            val hasPositiveBalance = account.balanceToman > 0L
+            AccountRowUi(
+                account = account,
+                logoKey = JibemanAssetLogoCache.resolveBankLogoKey(account.bankName),
+                titleText = if (account.bankName.startsWith("بانک ")) account.bankName else "بانک ${account.bankName}",
+                shortSourceDateLabel = "$sourcePrefix • $shortDate",
+                formattedBalanceRun = PersianNumberUtils.formatIsolatedAmountRun(account.balanceToman, false),
+                balanceColor = if (hasPositiveBalance) NishapurTurquoiseSoft else SaffronGoldLight,
+                unitColor = if (hasPositiveBalance) AccUnitTurquoise else AccUnitGold
+            )
+        }
+    }
 
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
             .testTag("accounts_screen"),
         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 1. Top Summary Card
-        item {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(
-                                PersianLapisGlow,
-                                PersianLapis,
-                                PersianLapisDeep
-                            ),
-                            start = Offset(0f, 0f),
-                            end = Offset(800f, 600f)
-                        )
-                    )
-                    .border(1.dp, PersianLapisLight.copy(alpha = 0.35f), RoundedCornerShape(24.dp))
-                    .padding(20.dp)
-                    .testTag("accounts_summary_card"),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                if (tankhahModeEnabled) {
-                    Row(
+        // 1. Minimalist Borderless Tonal Summary matching HeroMathBreakdownBottomSheet North Star
+        item(key = "accounts_summary_card", contentType = "summary_card") {
+            if (tankhahModeEnabled) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("accounts_summary_card"),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Column(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(NishapurTurquoiseDeep.copy(alpha = 0.55f))
-                            .border(1.dp, NishapurTurquoiseBright.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .weight(1f)
+                            .background(AccHeroCardBg, AccCardShape20)
+                            .padding(horizontal = 14.dp, vertical = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(
-                            text = "موجودی تنخواه (خرج روزمره):",
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                            color = NishapurTurquoiseSoft
-                        )
-                        Text(
-                            text = PersianNumberUtils.formatToman(
-                                tankhahAccountsToman,
-                                showUnit = true,
-                                hideAmount = hideAmounts
-                            ),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(22.dp)
+                                    .clip(CircleShape)
+                                    .background(AccHeroIconBg)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AccountBalanceWallet,
+                                    contentDescription = null,
+                                    tint = NishapurTurquoiseBright,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+                            Text(
+                                text = "تنخواه (روزمره)",
+                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                color = NishapurTurquoiseSoft,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        OrosiAmountText(
+                            amountToman = tankhahAccountsToman,
                             color = AlabasterSilk,
+                            numberStyle = MaterialTheme.typography.titleMedium.copy(fontSize = 15.5.sp),
+                            numberFontWeight = FontWeight.ExtraBold,
+                            unitStyle = MaterialTheme.typography.labelSmall,
+                            unitColor = NishapurTurquoiseSoft,
+                            hideAmount = hideAmounts,
+                            stackedUnit = true,
                             modifier = Modifier.testTag("tankhah_accounts_balance_text")
                         )
                     }
 
-                    Row(
+                    Column(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(PersianLapis.copy(alpha = 0.65f))
-                            .border(1.dp, PersianLapisLight.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .weight(1f)
+                            .background(AccSavingsCardBg, AccCardShape20)
+                            .padding(horizontal = 14.dp, vertical = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(
-                            text = "سایر حساب‌ها (پس‌انداز):",
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                            color = PersianLapisLight
-                        )
-                        Text(
-                            text = PersianNumberUtils.formatToman(
-                                nonTankhahAccountsToman,
-                                showUnit = true,
-                                hideAmount = hideAmounts
-                            ),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(22.dp)
+                                    .clip(CircleShape)
+                                    .background(AccSavingsIconBg)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Savings,
+                                    contentDescription = null,
+                                    tint = SaffronGoldBright,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+                            Text(
+                                text = "سایر حساب‌ها",
+                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                color = PersianLapisLight,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        OrosiAmountText(
+                            amountToman = nonTankhahAccountsToman,
                             color = SaffronGoldLight,
-                            modifier = Modifier.testTag("total_accounts_balance_text")
-                        )
-                    }
-                } else {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(NishapurTurquoiseDeep.copy(alpha = 0.55f))
-                            .border(1.dp, NishapurTurquoiseBright.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "موجودی کل حساب‌ها:",
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                            color = NishapurTurquoiseSoft
-                        )
-                        Text(
-                            text = PersianNumberUtils.formatToman(
-                                totalAllAccountsToman,
-                                showUnit = true,
-                                hideAmount = hideAmounts
-                            ),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
-                            color = AlabasterSilk,
+                            numberStyle = MaterialTheme.typography.titleMedium.copy(fontSize = 15.5.sp),
+                            numberFontWeight = FontWeight.ExtraBold,
+                            unitStyle = MaterialTheme.typography.labelSmall,
+                            unitColor = AccUnitGold,
+                            hideAmount = hideAmounts,
+                            stackedUnit = true,
                             modifier = Modifier.testTag("total_accounts_balance_text")
                         )
                     }
                 }
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(AccHeroCardBg, AccCardShape20)
+                        .padding(horizontal = 18.dp, vertical = 16.dp)
+                        .testTag("accounts_summary_card"),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(AccHeroIconBg)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AccountBalanceWallet,
+                                contentDescription = null,
+                                tint = NishapurTurquoiseBright,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "موجودی کل حساب‌ها",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = NishapurTurquoiseSoft
+                            )
+                            Text(
+                                text = "${PersianNumberUtils.toPersianDigits(bankAccounts.size.toString())} حساب فعال",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = OrosiOnSurfaceVariant
+                            )
+                        }
+                    }
+
+                    OrosiAmountText(
+                        amountToman = totalAllAccountsToman,
+                        color = AlabasterSilk,
+                        numberStyle = MaterialTheme.typography.titleMedium.copy(fontSize = 17.sp),
+                        numberFontWeight = FontWeight.ExtraBold,
+                        unitStyle = MaterialTheme.typography.labelSmall,
+                        unitColor = NishapurTurquoiseSoft,
+                        hideAmount = hideAmounts,
+                        modifier = Modifier.testTag("total_accounts_balance_text")
+                    )
+                }
             }
         }
 
-        // 2. Clean Switch: "فعالسازی حالت حساب تنخواه (تفکیک خرج روزمره از پس‌انداز)"
-        item {
+        // 2. Borderless Tonal Switch: تفکیک حساب تنخواه / شرکت
+        item(key = "tankhah_mode_card", contentType = "tankhah_switch") {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(OrosiSurfaceHigh)
-                    .border(
-                        1.dp,
-                        if (tankhahModeEnabled) NishapurTurquoiseBright.copy(alpha = 0.55f) else OrosiHairline,
-                        RoundedCornerShape(18.dp)
-                    )
+                    .background(OrosiSurfaceContainer, AccCardShape20)
                     .padding(horizontal = 16.dp, vertical = 12.dp)
                     .testTag("enable_tankhah_mode_card"),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -218,21 +315,23 @@ fun AccountsScreen(
                         text = "تفکیک حساب تنخواه / شرکت",
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
+                            fontSize = 13.5.sp
                         ),
                         color = AlabasterSilk,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(modifier = Modifier.height(3.dp))
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = if (tankhahModeEnabled) {
-                            "فعال: کارت‌های تنخواه / شرکت از شخصی تفکیک شده‌اند"
+                            "کارت‌های تنخواه از حساب‌های شخصی جدا هستند"
                         } else {
-                            "غیرفعال (پیش‌فرض): مجموع کل حساب‌ها یکجا محاسبه می‌شود"
+                            "مجموع همه حساب‌ها یکجا نمایش داده می‌شود"
                         },
                         style = MaterialTheme.typography.labelSmall,
-                        color = OrosiOnSurfaceVariant
+                        color = OrosiOnSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 Spacer(modifier = Modifier.width(12.dp))
@@ -248,172 +347,162 @@ fun AccountsScreen(
             }
         }
 
-        // 3. Section header
-        item {
+        // 3. Calm Section Header
+        item(key = "accounts_section_header", contentType = "section_header") {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp, start = 4.dp, end = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "منابع مالی و حساب‌های بانکی",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                    color = AlabasterSilk
+                    text = "حساب‌های بانکی و منابع مالی",
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 14.sp
+                    ),
+                    color = PersianLapisLight
                 )
                 Text(
-                    text = "${PersianNumberUtils.toPersianDigits(bankAccounts.size.toString())} حساب فعال",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = OrosiOnSurfaceVariant
+                    text = "برای ویرایش لمس کنید",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = OrosiOnSurfaceVariant.copy(alpha = 0.78f)
                 )
             }
         }
 
-        // 4. List of all bank accounts detected from SMS (tap any card to edit, rescan SMS, or delete)
+        // 4. Minimalist Borderless Bank Account Cards (single-line short date + subtle ChevronLeft)
         items(
-            items = bankAccounts,
-            key = { it.bankName }
-        ) { account ->
+            items = accountRows,
+            key = { it.account.bankName },
+            contentType = { "bank_account_card" }
+        ) { row ->
             BankAccountRowCard(
-                account = account,
+                row = row,
                 hideAmounts = hideAmounts,
                 tankhahModeEnabled = tankhahModeEnabled,
-                onClick = { onAccountClick(account) },
-                onToggleTankhah = { onToggleTankhah(account.bankName) }
+                onClick = { onAccountClick(row.account) },
+                onToggleTankhah = { onToggleTankhah(row.account.bankName) }
             )
         }
 
-        // 5. Button: "افزودن منبع مالی"
-        item {
-            Spacer(modifier = Modifier.height(4.dp))
+        // 5. Primary Add Source Button
+        item(key = "add_financial_source_footer", contentType = "footer_button") {
+            Spacer(modifier = Modifier.height(6.dp))
             Button(
                 onClick = onOpenAddAccountModal,
-                shape = RoundedCornerShape(18.dp),
+                shape = AccBtnShape18,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = NishapurTurquoise,
                     contentColor = AlabasterSilk
                 ),
-                contentPadding = PaddingValues(vertical = 16.dp),
+                contentPadding = PaddingValues(vertical = 15.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, NishapurTurquoiseBright, RoundedCornerShape(18.dp))
                     .testTag("add_financial_source_button")
             ) {
                 Icon(imageVector = Icons.Default.Add, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "افزودن منبع مالی",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
                 )
             }
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
         }
     }
 }
 
 @Composable
 private fun BankAccountRowCard(
-    account: BankAccountEntity,
+    row: AccountRowUi,
     hideAmounts: Boolean,
     tankhahModeEnabled: Boolean,
     onClick: () -> Unit,
     onToggleTankhah: () -> Unit
 ) {
-    val lastUpdatedJalali = JalaliCalendarUtils.fromTimestamp(account.lastUpdatedTimestamp)
+    val account = row.account
+    val cardBg = if (tankhahModeEnabled && account.isTankhah) AccTankhahRowBg else OrosiSurfaceContainer
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(OrosiSurfaceHigh)
-            .border(
-                1.dp,
-                if (tankhahModeEnabled && account.isTankhah) NishapurTurquoiseBright.copy(alpha = 0.45f) else OrosiHairline,
-                RoundedCornerShape(20.dp)
-            )
+            .background(cardBg, AccCardShape20)
             .clickable(onClick = onClick)
-            .padding(18.dp)
+            .padding(horizontal = 15.dp, vertical = 13.dp)
             .testTag("account_card_${account.bankName}"),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(11.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.weight(1f)
+            BankLogoAvatar(
+                bankName = account.bankName,
+                size = 40.dp,
+                preResolvedLogoKey = row.logoKey
+            )
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                com.example.ui.components.BankLogoAvatar(
-                    bankName = account.bankName,
-                    size = 44.dp
+                Text(
+                    text = row.titleText,
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.5.sp
+                    ),
+                    color = AlabasterSilk,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.width(12.dp))
-                Column {
-                    Text(
-                        text = "بانک ${account.bankName}",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = AlabasterSilk
-                    )
-                    Text(
-                        text = if (account.isManual) {
-                            "منبع مالی دستی • ${lastUpdatedJalali.dateWithYear}"
-                        } else {
-                            "شناسایی خودکار از پیامک • ${lastUpdatedJalali.dateWithYear}"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = OrosiOnSurfaceVariant
-                    )
-                }
+                Text(
+                    text = row.shortSourceDateLabel,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
+                    color = OrosiOnSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
 
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = PersianNumberUtils.formatToman(
-                        account.balanceToman,
-                        showUnit = true,
-                        hideAmount = hideAmounts
-                    ),
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 15.5.sp
-                    ),
-                    color = if (account.balanceToman > 0L) NishapurTurquoiseSoft else SaffronGoldLight
-                )
-                Spacer(modifier = Modifier.height(3.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = "ویرایش حساب",
-                        tint = PersianLapisLight,
-                        modifier = Modifier.size(12.dp)
-                    )
-                    Text(
-                        text = "مدیریت و ویرایش",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = PersianLapisLight
-                    )
-                }
-            }
+            OrosiAmountText(
+                amountToman = account.balanceToman,
+                color = row.balanceColor,
+                numberStyle = MaterialTheme.typography.titleSmall.copy(fontSize = 14.5.sp),
+                numberFontWeight = FontWeight.ExtraBold,
+                unitStyle = MaterialTheme.typography.labelSmall,
+                unitColor = row.unitColor,
+                hideAmount = hideAmounts,
+                preformattedNumberRun = row.formattedBalanceRun
+            )
+
+            Icon(
+                imageVector = Icons.Default.ChevronLeft,
+                contentDescription = "ویرایش حساب",
+                tint = OrosiOnSurfaceVariant.copy(alpha = 0.65f),
+                modifier = Modifier.size(18.dp)
+            )
         }
 
-        // Toggle row: "حساب تنخواه (خرج روزمره)" ONLY shown when tankhahModeEnabled == true
         if (tankhahModeEnabled) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(OrosiSurfaceContainer)
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                    .background(OrosiSurfaceHigh, AccSubPillShape14)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     text = "حساب تنخواه (خرج روزمره)",
-                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
                     color = AlabasterSilk
                 )
                 Switch(

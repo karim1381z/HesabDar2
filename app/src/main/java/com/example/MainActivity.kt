@@ -356,6 +356,9 @@ fun OrosiFinanceApp(
             val onOpenTransactionsTab = remember(viewModel) { { viewModel.navigateTo(OrosiScreen.TRANSACTIONS) } }
             val onChangeMonth = remember(viewModel) { { delta: Int -> viewModel.changeSelectedMonth(delta) } }
             val onBackToHome = remember(viewModel) { { viewModel.navigateTo(OrosiScreen.HOME) } }
+            val onSetTankhahModeEnabled = remember(viewModel) { { enabled: Boolean -> viewModel.setTankhahModeEnabled(enabled) } }
+            val onAccountClick = remember(viewModel) { { account: com.example.data.local.BankAccountEntity -> viewModel.openAccountEditSheet(account) } }
+            val onOpenAddAccountModal = remember(viewModel) { { viewModel.setShowAddBankAccountModal(true) } }
             val onAddVoiceClick = remember(voicePermissionLauncher) {
                 {
                     voicePermissionLauncher.launch(
@@ -377,6 +380,7 @@ fun OrosiFinanceApp(
                             commitments = uiState.commitments,
                             transactions = uiState.transactions,
                             isSyncingSms = uiState.isSyncingSms,
+                            hasLoadedFromDb = uiState.hasLoadedFromDb,
                             onToggleHideAmounts = onToggleHideAmounts,
                             onSetOnlyTankhahMode = onSetOnlyTankhahMode,
                             onToggleAccountTankhah = onToggleAccountTankhah,
@@ -409,11 +413,11 @@ fun OrosiFinanceApp(
                             bankAccounts = uiState.bankAccounts,
                             hideAmounts = uiState.settings.hideAmounts,
                             tankhahModeEnabled = uiState.settings.tankhahModeEnabled,
-                            onSetTankhahModeEnabled = { viewModel.setTankhahModeEnabled(it) },
-                            onToggleTankhah = { bankName -> viewModel.toggleAccountTankhah(bankName) },
-                            onAccountClick = { account -> viewModel.openAccountEditSheet(account) },
-                            onOpenAddAccountModal = { viewModel.setShowAddBankAccountModal(true) },
-                            onBackToHome = { viewModel.navigateTo(OrosiScreen.HOME) }
+                            onSetTankhahModeEnabled = onSetTankhahModeEnabled,
+                            onToggleTankhah = onToggleAccountTankhah,
+                            onAccountClick = onAccountClick,
+                            onOpenAddAccountModal = onOpenAddAccountModal,
+                            onBackToHome = onBackToHome
                         )
                     }
 
