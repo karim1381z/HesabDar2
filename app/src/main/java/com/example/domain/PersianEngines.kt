@@ -523,48 +523,50 @@ object JalaliCalendarUtils {
 
     /**
      * Computes the exact `[startMillis, endExclusiveMillis)` Tehran-time window and human-readable
-     * Jalali range label for the user's current payday cycle (e.g. 1st..30th when `paydayStartDay == 1`,
-     * or 25 Mehr..24 Aban when `paydayStartDay == 25`).
+     * Jalali range label for the user's payday cycle (`cycleOffsetMonths = 0` for current cycle,
+     * `-1` for previous cycle, etc.).
      */
     fun currentPaydayCycleRange(
         paydayStartDay: Int,
-        nowMillis: Long = System.currentTimeMillis()
+        nowMillis: Long = System.currentTimeMillis(),
+        cycleOffsetMonths: Int = 0
     ): PaydayCycleWindow {
         val nowJ = fromTimestamp(nowMillis)
         val safeStartDay = paydayStartDay.coerceIn(1, 30)
 
-        val startY: Int
-        val startM: Int
-        val startD: Int
-        val endY: Int
-        val endM: Int
-        val endD: Int
+        val baseStartY: Int
+        val baseStartM: Int
+        val baseEndY: Int
+        val baseEndM: Int
 
         if (safeStartDay == 1) {
-            startY = nowJ.year
-            startM = nowJ.month
-            startD = 1
+            baseStartY = nowJ.year
+            baseStartM = nowJ.month
             val nextYm = shiftJalaliYearMonth(nowJ.yearMonthKey, 1)
-            endY = nextYm / 100
-            endM = nextYm % 100
-            endD = 1
+            baseEndY = nextYm / 100
+            baseEndM = nextYm % 100
         } else if (nowJ.day >= safeStartDay) {
-            startY = nowJ.year
-            startM = nowJ.month
-            startD = safeStartDay.coerceAtMost(daysInJalaliMonth(startY, startM))
+            baseStartY = nowJ.year
+            baseStartM = nowJ.month
             val nextYm = shiftJalaliYearMonth(nowJ.yearMonthKey, 1)
-            endY = nextYm / 100
-            endM = nextYm % 100
-            endD = safeStartDay.coerceAtMost(daysInJalaliMonth(endY, endM))
+            baseEndY = nextYm / 100
+            baseEndM = nextYm % 100
         } else {
             val prevYm = shiftJalaliYearMonth(nowJ.yearMonthKey, -1)
-            startY = prevYm / 100
-            startM = prevYm % 100
-            startD = safeStartDay.coerceAtMost(daysInJalaliMonth(startY, startM))
-            endY = nowJ.year
-            endM = nowJ.month
-            endD = safeStartDay.coerceAtMost(daysInJalaliMonth(endY, endM))
+            baseStartY = prevYm / 100
+            baseStartM = prevYm % 100
+            baseEndY = nowJ.year
+            baseEndM = nowJ.month
         }
+
+        val shiftedStartYm = shiftJalaliYearMonth(baseStartY * 100 + baseStartM, cycleOffsetMonths)
+        val shiftedEndYm = shiftJalaliYearMonth(baseEndY * 100 + baseEndM, cycleOffsetMonths)
+        val startY = shiftedStartYm / 100
+        val startM = shiftedStartYm % 100
+        val endY = shiftedEndYm / 100
+        val endM = shiftedEndYm % 100
+        val startD = if (safeStartDay == 1) 1 else safeStartDay.coerceAtMost(daysInJalaliMonth(startY, startM))
+        val endD = if (safeStartDay == 1) 1 else safeStartDay.coerceAtMost(daysInJalaliMonth(endY, endM))
 
         val startMillis = jalaliDayStartMillis(startY, startM, startD)
         val endExclusiveMillis = jalaliDayStartMillis(endY, endM, endD)
@@ -585,8 +587,8 @@ object JalaliCalendarUtils {
     }
 
     /**
-     * Resolves colloquial Persian relative due-date hints ("فردا", "پس‌فردا", "هفته بعد", "ماه بعد")
-     * into an actual Jalali date string.
+     * Resolves colloquial Persian relative due/reference date hints ("فردا", "پس‌فردا", "سر ماه",
+     * "آخر ماه", "دیروز", "پریروز", "هفته پیش", "هفته بعد", "ماه بعد") into an actual Jalali date string.
      */
     fun resolveRelativeJalaliDate(
         hint: String,
@@ -594,6 +596,7 @@ object JalaliCalendarUtils {
     ): String {
         val norm = PersianNumberUtils.normalizePersianText(hint.trim())
         val nowJ = fromTimestamp(nowMillis)
+        val dayMs = 86_400_000L
         return when {
             norm.contains("سر ماه") || norm.contains("اول ماه") -> {
                 val nextYm = shiftJalaliYearMonth(nowJ.yearMonthKey, 1)
@@ -605,14 +608,28 @@ object JalaliCalendarUtils {
                 val lastDay = daysInJalaliMonth(nowJ.year, nowJ.month)
                 fromTimestamp(jalaliDayStartMillis(nowJ.year, nowJ.month, lastDay)).dateWithYear
             }
+            norm.contains("پریروز") ->
+                fromTimestamp(nowMillis - 2L * dayMs).dateWithYear
+            norm.contains("دیروز") || norm.contains("دیشب") ->
+                fromTimestamp(nowMillis - 1L * dayMs).dateWithYear
+            norm.contains("سه روز پیش") || norm.contains("۳ روز پیش") || norm.contains("3 روز پیش") ->
+                fromTimestamp(nowMillis - 3L * dayMs).dateWithYear
+            norm.contains("چهار روز پیش") || norm.contains("۴ روز پیش") || norm.contains("4 روز پیش") ->
+                fromTimestamp(nowMillis - 4L * dayMs).dateWithYear
+            norm.contains("هفته پیش") || norm.contains("هفته گذشته") ->
+                fromTimestamp(nowMillis - 7L * dayMs).dateWithYear
             norm.contains("پس‌فردا") || norm.contains("پس فردا") ->
-                fromTimestamp(nowMillis + 2L * 86_400_000L).dateWithYear
+                fromTimestamp(nowMillis + 2L * dayMs).dateWithYear
             norm.contains("فردا") ->
-                fromTimestamp(nowMillis + 1L * 86_400_000L).dateWithYear
+                fromTimestamp(nowMillis + 1L * dayMs).dateWithYear
             norm.contains("هفته بعد") || norm.contains("هفته آینده") || norm.contains("هفته دیگر") ->
-                fromTimestamp(nowMillis + 7L * 86_400_000L).dateWithYear
+                fromTimestamp(nowMillis + 7L * dayMs).dateWithYear
             norm.contains("ماه بعد") || norm.contains("ماه آینده") || norm.contains("ماه دیگر") ->
-                fromTimestamp(nowMillis + 30L * 86_400_000L).dateWithYear
+                fromTimestamp(nowMillis + 30L * dayMs).dateWithYear
+            jalaliDateStringToTimestampMillis(norm, nowMillis) != null -> {
+                val ts = jalaliDateStringToTimestampMillis(norm, nowMillis)!!
+                fromTimestamp(ts).dateWithYear
+            }
             else -> fromTimestamp(nowMillis).dateWithYear
         }
     }
@@ -655,9 +672,18 @@ data class PaydayCashflowSummary(
     val excludedSelfTransferDetails: List<SelfTransferPairDetail> = emptyList()
 )
 
+data class HeroBalanceDisplay(
+    val headlineAmountToman: Long,
+    val isShortfall: Boolean,
+    val shortfallAmountToman: Long,
+    val coverageRatio: Float
+)
+
 /**
- * Pure P0 accounting analyzer for the user's current payday cycle:
+ * Pure P0 accounting analyzer for the user's payday cycles:
  * - Strictly filters transactions to `[cycleStartMillis, cycleEndExclusiveMillis)`.
+ * - Supports offset navigation (`cycleOffsetMonths = 0` current, `-1` previous, etc.) and smart
+ *   initial fallback when the brand-new cycle has zero transactions yet.
  * - Detects and excludes internal self-transfers between two different bank accounts of the user
  *   (identical `totalAmountToman` > 0 within ±10 minutes, 1-to-1 greedy closest-time matching)
  *   as well as any rows already typed `SELF_TRANSFER`.
@@ -672,13 +698,78 @@ object OrosiCashflowAnalyzer {
         return clean != "نقدی / دستی" && clean != "دستی" && clean != "نقدی" && clean != "تراکنش صوتی"
     }
 
+    /**
+     * Computes the Home Hero Card's headline figure without ever showing a misleading `۰ تومان`
+     * when real cash exists in bank accounts but upcoming installments/checks exceed it.
+     */
+    fun resolveHeroBalanceDisplay(
+        totalBalanceToman: Long,
+        unpaidCommitmentsToman: Long
+    ): HeroBalanceDisplay {
+        val safeBalance = totalBalanceToman.coerceAtLeast(0L)
+        val safeCommitments = unpaidCommitmentsToman.coerceAtLeast(0L)
+        if (safeCommitments > safeBalance) {
+            val shortfall = safeCommitments - safeBalance
+            val ratio = if (safeCommitments > 0L) {
+                (safeBalance.toFloat() / safeCommitments.toFloat()).coerceIn(0.06f, 1f)
+            } else {
+                0.5f
+            }
+            return HeroBalanceDisplay(
+                headlineAmountToman = safeBalance,
+                isShortfall = true,
+                shortfallAmountToman = shortfall,
+                coverageRatio = ratio
+            )
+        }
+        val freeBalance = (safeBalance - safeCommitments).coerceAtLeast(0L)
+        val denom = (safeBalance + safeCommitments).coerceAtLeast(1L)
+        val ratio = if (safeBalance > 0L) {
+            (freeBalance.toFloat() / denom.toFloat()).coerceIn(0.12f, 1f)
+        } else {
+            0.5f
+        }
+        return HeroBalanceDisplay(
+            headlineAmountToman = freeBalance,
+            isShortfall = false,
+            shortfallAmountToman = 0L,
+            coverageRatio = ratio
+        )
+    }
+
+    /**
+     * Resolves the best initial payday cycle offset (`0` normally, or `-1` if the brand-new cycle
+     * has zero transactions while the immediately preceding cycle has transactions).
+     */
+    fun resolveInitialPaydayCycleOffset(
+        transactions: List<CashflowTxSnapshot>,
+        paydayStartDay: Int,
+        nowMillis: Long = System.currentTimeMillis()
+    ): Int {
+        val currentWin = JalaliCalendarUtils.currentPaydayCycleRange(paydayStartDay, nowMillis, 0)
+        val hasCurrent = transactions.any {
+            it.totalAmountToman > 0L &&
+                it.timestamp >= currentWin.startMillis &&
+                it.timestamp < currentWin.endExclusiveMillis
+        }
+        if (hasCurrent) return 0
+        val prevWin = JalaliCalendarUtils.currentPaydayCycleRange(paydayStartDay, nowMillis, -1)
+        val hasPrev = transactions.any {
+            it.totalAmountToman > 0L &&
+                it.timestamp >= prevWin.startMillis &&
+                it.timestamp < prevWin.endExclusiveMillis
+        }
+        return if (hasPrev) -1 else 0
+    }
+
     fun analyzeCurrentPaydayCycle(
         transactions: List<CashflowTxSnapshot>,
         paydayStartDay: Int,
         reservedCommitmentsToman: Long,
-        nowMillis: Long = System.currentTimeMillis()
+        nowMillis: Long = System.currentTimeMillis(),
+        cycleOffsetMonths: Int = 0
     ): PaydayCashflowSummary {
-        val window = JalaliCalendarUtils.currentPaydayCycleRange(paydayStartDay, nowMillis)
+        val window = JalaliCalendarUtils.currentPaydayCycleRange(paydayStartDay, nowMillis, cycleOffsetMonths)
         val inCycle = transactions.filter { tx ->
             tx.totalAmountToman > 0L &&
                 tx.timestamp >= window.startMillis &&
@@ -3978,22 +4069,40 @@ object PersianVoiceSlangParserEngine {
             detectedCommitmentKind == "DEBT" -> "بدهی"
             else -> ""
         }
-        val extractedDueDateHint = if (detectedCommitmentKind != null) {
-            dueDateHintRegex.find(cleaned)?.groupValues?.get(1)?.replace(whitespaceRegex, " ")?.trim()
-                ?.ifBlank { JalaliCalendarUtils.stripYearFromJalaliDate(extractedExplicitDate) }
-                ?: JalaliCalendarUtils.stripYearFromJalaliDate(extractedExplicitDate)
+        val rawPastOffset = if (isTaggingExistingSms || extractedExplicitDate.isNotBlank()) {
+            0
+        } else {
+            extractPastRelativeDayOffset(rawSpeech)
+        }
+        val futureDueHint = if (detectedCommitmentKind != null) {
+            dueDateHintRegex.find(cleaned)?.groupValues?.get(1)?.replace(whitespaceRegex, " ")?.trim().orEmpty()
         } else {
             ""
         }
-        val effectiveExplicitJalaliDate = if (isTaggingExistingSms || detectedCommitmentKind != null) {
+        val pastCommitmentDateHint = when {
+            detectedCommitmentKind == null -> ""
+            rawPastOffset == -1 -> "دیروز"
+            rawPastOffset == -2 -> "پریروز"
+            rawPastOffset < -2 -> "${PersianNumberUtils.toPersianDigits((-rawPastOffset).toString())} روز پیش"
+            Regex("""(?<=^|\s)هفته\s+(?:پیش|گذشته)(?=\s|$)""").containsMatchIn(cleaned) -> "هفته پیش"
+            else -> ""
+        }
+        val extractedDueDateHint = if (detectedCommitmentKind != null) {
+            futureDueHint
+                .ifBlank { JalaliCalendarUtils.stripYearFromJalaliDate(extractedExplicitDate) }
+                .ifBlank { pastCommitmentDateHint }
+        } else {
+            ""
+        }
+        val effectiveExplicitJalaliDate = if (isTaggingExistingSms) {
             ""
         } else {
             extractedExplicitDate
         }
-        val extractedPastDayOffset = if (isTaggingExistingSms || detectedCommitmentKind != null || effectiveExplicitJalaliDate.isNotBlank()) {
+        val extractedPastDayOffset = if (isTaggingExistingSms || effectiveExplicitJalaliDate.isNotBlank() || futureDueHint.isNotBlank()) {
             0
         } else {
-            extractPastRelativeDayOffset(rawSpeech)
+            rawPastOffset
         }
         val isVagueRecentPast = !isTaggingExistingSms &&
             detectedCommitmentKind == null &&
@@ -4156,15 +4265,43 @@ object PersianVoiceSlangParserEngine {
             .replace(Regex("""(?<!به\s)کارت\s+(?:بلو|ملت|ملی|سپه|پاسارگاد|سامان|صادرات|تجارت|رسالت|ویپاد|مسکن|رفاه|پارسیان|کشاورزی|گردشگری|شهر|سینا|آینده|دی|کارآفرین)"""), " ")
 
         if (detectedCommitmentKind != null) {
+            // Strip colloquial past-reference temporal phrases BEFORE general cleanup
+            // e.g. "برای دیروز بوده", "مال پریروز بوده", "برای هفته پیش بوده"
             corePhrase = corePhrase
+                .replace(
+                    Regex("""(?<=^|\s)(?:برای|مالِ|مال)\s+(?:دیروز|دیشب|پریروز|امروز|هفته\s+پیش|هفته\s+گذشته|ماه\s+پیش|ماه\s+گذشته|چند\s+روز\s+پیش)(?:\s+(?:بوده|بودش|بود|است|هست|شده))?(?=\s|$)"""),
+                    " "
+                )
                 .replace(dueDateHintRegex, " ")
                 .replace(futureExpectedInflowRegex, " ")
                 .replace(futurePlannedPurchaseRegex, " ")
-                .replace(Regex("""(?<=^|\s)(?:دارم|داریم|هستم|هست|باید\s+بدم|باید\s+بدهم|باید\s+پرداخت\s+کنم|باید\s+بگیرم|باید|قراره\s+بهم\s+بده|قراره\s+بهم\s+بدن|باید\s+بهم\s+بده|باید\s+بهم\s+بدن|بخرم|بگیرم|بدم|بدهم|بپردازم|پاس\s+کنم|پرداخت\s+کنم|خرج\s+کنم)(?=\s|$)"""), " ")
+                .replace(Regex("""(?<=^|\s)(?:دارم|داریم|هستم|هست|بوده|بودش|بود|باید\s+بدم|باید\s+بدهم|باید\s+پرداخت\s+کنم|باید\s+بگیرم|باید|قراره\s+بهم\s+بده|قراره\s+بهم\s+بدن|باید\s+بهم\s+بده|باید\s+بهم\s+بدن|بخرم|بگیرم|بدم|بدهم|بپردازم|پاس\s+کنم|پرداخت\s+کنم|خرج\s+کنم)(?=\s|$)"""), " ")
                 .replace(Regex("""(?<=^|\s)(?:بدهکارم|بدهکار)(?=\s|$)"""), " بدهی ")
                 .replace(Regex("""(?<=^|\s)(?:طلبکارم|طلبکار)(?=\s|$)"""), " طلب ")
                 .replace(Regex("""(?<=^|\s)به\s+([ء-ۿ\u200C]+)\s+بدهی(?=\s|$)"""), "بدهی به $1")
                 .replace(Regex("""(?<=^|\s)از\s+([ء-ۿ\u200C]+)\s+طلب(?=\s|$)"""), "طلب از $1")
+                .replace(whitespaceRegex, " ")
+                .trim()
+
+            // Remove colloquial possessive echo of the commitment noun itself (e.g. "بدهی ... بدهیم" -> "بدهی",
+            // "طلب ... طلبم" -> "طلب", "قسط ... قسطم" -> "قسط") while preserving meaningful recipients/subjects
+            val commitmentEchoPairs = listOf(
+                "بدهی" to Regex("""(?<=^|\s)(?:بدهی‌ام|بدهیم|بدهیش|بدهی‌اش)(?=\s|$)"""),
+                "طلب" to Regex("""(?<=^|\s)(?:طلبم|طلبش)(?=\s|$)"""),
+                "قسط" to Regex("""(?<=^|\s)(?:قسطم|قسطش)(?=\s|$)"""),
+                "چک" to Regex("""(?<=^|\s)(?:چکم|چکش)(?=\s|$)""")
+            )
+            for ((baseNoun, echoRegex) in commitmentEchoPairs) {
+                if (echoRegex.containsMatchIn(corePhrase)) {
+                    corePhrase = if (Regex("""(?<=^|\s)$baseNoun(?=\s|$)""").containsMatchIn(corePhrase)) {
+                        corePhrase.replace(echoRegex, " ")
+                    } else {
+                        corePhrase.replace(echoRegex, " $baseNoun ")
+                    }
+                }
+            }
+            corePhrase = corePhrase
+                .replace(Regex("""(?:\s+(?:برای|مالِ|مال|از|به))+$"""), "")
                 .replace(whitespaceRegex, " ")
                 .trim()
         }

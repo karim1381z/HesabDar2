@@ -574,7 +574,8 @@ private fun MinimalLedgerTransactionCard(
         BankLogoAvatar(
             bankName = row.shortBank,
             size = 40.dp,
-            preResolvedLogoKey = row.logoKey
+            preResolvedLogoKey = row.logoKey,
+            directionIndicatorIsIncome = row.isIncome
         )
 
         Column(

@@ -12,12 +12,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.outlined.ArrowDownward
+import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -28,9 +31,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.domain.PersianNumberUtils
+import com.example.ui.theme.NishapurTurquoiseBright
+import com.example.ui.theme.NishapurTurquoiseDeep
 import com.example.ui.theme.NishapurTurquoiseSoft
 import com.example.ui.theme.OrosiHairline
+import com.example.ui.theme.OrosiSurfaceContainer
 import com.example.ui.theme.PersianLapis
+import com.example.ui.theme.RubyRoseSoft
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.runtime.getValue
@@ -291,12 +298,16 @@ fun resolveBankLogoDrawableRes(bankName: String): Int? {
     }
 }
 
+private val DirectionBadgeExpenseBg = Color(0xFF3E1826)
+
 @Composable
 fun BankLogoAvatar(
     bankName: String,
     modifier: Modifier = Modifier,
     size: Dp = 44.dp,
-    preResolvedLogoKey: String? = null
+    preResolvedLogoKey: String? = null,
+    directionIndicatorIsIncome: Boolean? = null,
+    badgeCutoutColor: Color = OrosiSurfaceContainer
 ) {
     val logoKey = preResolvedLogoKey ?: remember(bankName) { JibemanAssetLogoCache.resolveBankLogoKey(bankName) }
     // Once cachedPainters is populated, bypass Snapshot state subscription for zero-overhead 120Hz scrolling.
@@ -307,39 +318,67 @@ fun BankLogoAvatar(
         remember(logoKey, loadVer) { JibemanAssetLogoCache.peekCachedPainter(logoKey) }
     }
 
-    if (cachedPainter != null) {
-        Image(
-            painter = cachedPainter,
-            contentDescription = "لوگوی بانک $bankName",
-            contentScale = ContentScale.Fit,
-            modifier = modifier.size(size)
-        )
-    } else {
-        val fallbackVectorRes = remember(bankName) { resolveBankLogoDrawableRes(bankName) }
-        if (fallbackVectorRes != null) {
+    val avatarContent: @Composable (Modifier) -> Unit = { avatarModifier ->
+        if (cachedPainter != null) {
             Image(
-                painter = painterResource(id = fallbackVectorRes),
+                painter = cachedPainter,
                 contentDescription = "لوگوی بانک $bankName",
                 contentScale = ContentScale.Fit,
-                modifier = modifier
-                    .size(size)
-                    .clip(CircleShape)
+                modifier = avatarModifier.size(size)
             )
         } else {
-            val isManualOrCash = remember(bankName) {
-                bankName.contains("نقدی") || bankName.contains("دستی") || bankName.contains("کیف پول")
+            val fallbackVectorRes = remember(bankName) { resolveBankLogoDrawableRes(bankName) }
+            if (fallbackVectorRes != null) {
+                Image(
+                    painter = painterResource(id = fallbackVectorRes),
+                    contentDescription = "لوگوی بانک $bankName",
+                    contentScale = ContentScale.Fit,
+                    modifier = avatarModifier
+                        .size(size)
+                        .clip(CircleShape)
+                )
+            } else {
+                val isManualOrCash = remember(bankName) {
+                    bankName.contains("نقدی") || bankName.contains("دستی") || bankName.contains("کیف پول")
+                }
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = avatarModifier
+                        .size(size)
+                        .background(PersianLapis, CircleShape)
+                ) {
+                    Icon(
+                        imageVector = if (isManualOrCash) Icons.Default.AccountBalanceWallet else Icons.Default.AccountBalance,
+                        contentDescription = bankName,
+                        tint = NishapurTurquoiseSoft,
+                        modifier = Modifier.size(size * 0.48f)
+                    )
+                }
             }
+        }
+    }
+
+    if (directionIndicatorIsIncome == null) {
+        avatarContent(modifier)
+    } else {
+        Box(modifier = modifier.size(size)) {
+            avatarContent(Modifier)
             Box(
                 contentAlignment = Alignment.Center,
-                modifier = modifier
-                    .size(size)
-                    .background(PersianLapis, CircleShape)
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(17.dp)
+                    .background(
+                        color = if (directionIndicatorIsIncome) NishapurTurquoiseDeep else DirectionBadgeExpenseBg,
+                        shape = CircleShape
+                    )
+                    .border(1.5.dp, badgeCutoutColor, CircleShape)
             ) {
                 Icon(
-                    imageVector = if (isManualOrCash) Icons.Default.AccountBalanceWallet else Icons.Default.AccountBalance,
-                    contentDescription = bankName,
-                    tint = NishapurTurquoiseSoft,
-                    modifier = Modifier.size(size * 0.48f)
+                    imageVector = if (directionIndicatorIsIncome) Icons.Outlined.ArrowDownward else Icons.Outlined.ArrowUpward,
+                    contentDescription = if (directionIndicatorIsIncome) "واریز" else "خرج",
+                    tint = if (directionIndicatorIsIncome) NishapurTurquoiseBright else RubyRoseSoft,
+                    modifier = Modifier.size(10.dp)
                 )
             }
         }

@@ -1538,10 +1538,22 @@ class OrosiFinanceRepository(
         }
         val isReceivable = item.commitmentKind == "RECEIVABLE" || item.isIncome
         val subTag = item.commitmentSubLabel.trim()
-        val resolvedJalaliDate = if (item.dueDateHint.isNotBlank()) {
-            "${item.dueDateHint} • ${JalaliCalendarUtils.resolveRelativeJalaliDate(item.dueDateHint, timestampMillis)}"
-        } else {
-            JalaliCalendarUtils.timestampToJalali(timestampMillis).dateWithYear
+        val resolvedJalaliDate = when {
+            item.explicitJalaliDate.isNotBlank() -> item.explicitJalaliDate
+            item.dueDateHint.isNotBlank() -> {
+                val resolved = JalaliCalendarUtils.resolveRelativeJalaliDate(item.dueDateHint, timestampMillis)
+                if (resolved.startsWith(item.dueDateHint)) resolved else "${item.dueDateHint} • $resolved"
+            }
+            item.eventDayOffset != 0 -> {
+                val targetTs = timestampMillis + item.eventDayOffset * 86_400_000L
+                val relWord = when (item.eventDayOffset) {
+                    -1 -> "دیروز"
+                    -2 -> "پریروز"
+                    else -> "${PersianNumberUtils.toPersianDigits(kotlin.math.abs(item.eventDayOffset).toString())} روز پیش"
+                }
+                "$relWord • ${JalaliCalendarUtils.timestampToJalali(targetTs).dateWithYear}"
+            }
+            else -> JalaliCalendarUtils.timestampToJalali(timestampMillis).dateWithYear
         }
         val counterpartyLabel = when {
             resolvedCategory == "LOAN_INSTALLMENT" -> "وام و قسط • ثبت صوتی"

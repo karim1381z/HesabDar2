@@ -82,6 +82,7 @@ import com.example.data.local.AppSettingsEntity
 import com.example.data.local.BankAccountEntity
 import com.example.data.local.CommitmentEntity
 import com.example.data.local.TransactionEntity
+import com.example.domain.OrosiCashflowAnalyzer
 import com.example.domain.PersianNumberUtils
 import com.example.ui.components.OrosiAmountText
 import com.example.ui.theme.AlabasterSilk
@@ -99,6 +100,7 @@ import com.example.ui.theme.PersianLapisGlow
 import com.example.ui.theme.PersianLapisLight
 import com.example.ui.theme.RubyRose
 import com.example.ui.theme.RubyRoseSoft
+import com.example.ui.theme.SaffronGold
 import com.example.ui.theme.SaffronGoldBright
 import com.example.ui.theme.SaffronGoldLight
 
@@ -627,14 +629,11 @@ private fun JibemanFinancialStatusHeroCard(
         HeroAccountFilter.TANKHAH_COMPANY -> tankhahBalance
     }
 
-    val freeBalance = (selectedTotalBalance - unpaidCommitmentsToman).coerceAtLeast(0L)
-
-    val denom = (selectedTotalBalance + unpaidCommitmentsToman).coerceAtLeast(1L)
-    val progressRatio = if (selectedTotalBalance > 0L) {
-        (freeBalance.toFloat() / denom.toFloat()).coerceIn(0.12f, 1f)
-    } else {
-        0.5f
-    }
+    val heroDisplay = OrosiCashflowAnalyzer.resolveHeroBalanceDisplay(
+        totalBalanceToman = selectedTotalBalance,
+        unpaidCommitmentsToman = unpaidCommitmentsToman
+    )
+    val progressRatio = heroDisplay.coverageRatio
 
     Column(
         modifier = Modifier
@@ -752,9 +751,9 @@ private fun JibemanFinancialStatusHeroCard(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 val centerSubtitle = when (effectiveFilter) {
-                    HeroAccountFilter.ALL -> "موجودی آزاد"
-                    HeroAccountFilter.PERSONAL -> "موجودی شخصی"
-                    HeroAccountFilter.TANKHAH_COMPANY -> "موجودی تنخواه و شرکت"
+                    HeroAccountFilter.ALL -> if (heroDisplay.isShortfall) "موجودی فعلی حساب‌ها" else "موجودی آزاد"
+                    HeroAccountFilter.PERSONAL -> if (heroDisplay.isShortfall) "موجودی فعلی شخصی" else "موجودی شخصی"
+                    HeroAccountFilter.TANKHAH_COMPANY -> if (heroDisplay.isShortfall) "موجودی فعلی تنخواه و شرکت" else "موجودی تنخواه و شرکت"
                 }
 
                 Text(
@@ -790,7 +789,7 @@ private fun JibemanFinancialStatusHeroCard(
                     )
                 } else {
                     OrosiAmountText(
-                        amountToman = freeBalance,
+                        amountToman = heroDisplay.headlineAmountToman,
                         color = AlabasterSilk,
                         numberStyle = MaterialTheme.typography.headlineMedium.copy(
                             fontWeight = FontWeight.ExtraBold,
@@ -806,6 +805,45 @@ private fun JibemanFinancialStatusHeroCard(
                         unitSpacing = 6.dp,
                         modifier = Modifier.testTag("hero_peace_of_mind_amount")
                     )
+
+                    if (heroDisplay.isShortfall) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier
+                                .clip(DashPillShape12)
+                                .background(SaffronGold.copy(alpha = 0.16f))
+                                .padding(horizontal = 11.dp, vertical = 5.dp)
+                                .testTag("hero_commitment_shortfall_badge")
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(SaffronGoldBright)
+                            )
+                            Text(
+                                text = "کسری پوشش تعهدات:",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = SaffronGoldLight,
+                                maxLines = 1
+                            )
+                            OrosiAmountText(
+                                amountToman = heroDisplay.shortfallAmountToman,
+                                color = SaffronGoldLight,
+                                numberStyle = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
+                                numberFontWeight = FontWeight.ExtraBold,
+                                unitStyle = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                                unitColor = SaffronGoldLight.copy(alpha = 0.85f),
+                                hideAmount = hideAmounts,
+                                unitSpacing = 3.dp
+                            )
+                        }
+                    }
 
                     AnimatedVisibility(visible = isSyncingSms) {
                         Column(
@@ -833,10 +871,10 @@ private fun JibemanFinancialStatusHeroCard(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Horizontal progress bar
+            // Horizontal progress bar (Turquoise when covered, warm Saffron-Amber when showing commitment shortfall)
             LinearProgressIndicator(
                 progress = { progressRatio },
-                color = NishapurTurquoiseBright,
+                color = if (heroDisplay.isShortfall) SaffronGoldBright else NishapurTurquoiseBright,
                 trackColor = Color.White.copy(alpha = 0.18f),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1208,7 +1246,8 @@ private fun CalmTransactionCardFast(
         com.example.ui.components.BankLogoAvatar(
             bankName = row.shortBank,
             size = 38.dp,
-            preResolvedLogoKey = row.logoKey
+            preResolvedLogoKey = row.logoKey,
+            directionIndicatorIsIncome = row.isIncome
         )
 
         Column(

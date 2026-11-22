@@ -1323,6 +1323,76 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun testOrosiV27CommitmentTitleDatePaydayOffsetAndHeroShortfall() {
+        // 1. Exact user video sentence: "خوب ۵۰ تومن طلب دارم ۲۵ تومن بدهی دارم برای دیروز بوده بدهیم و ۳۵ هزار تومان خرج بستنی کردم امروز"
+        val multi = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(
+            "خوب ۵۰ تومن طلب دارم ۲۵ تومن بدهی دارم برای دیروز بوده بدهیم و ۳۵ هزار تومان خرج بستنی کردم امروز"
+        )
+        assertEquals(3, multi.size)
+        assertEquals("RECEIVABLE", multi[0].commitmentKind)
+        assertEquals("طلب", multi[0].purposeCategory)
+        assertEquals(50_000L, multi[0].totalAmountToman)
+
+        assertEquals("DEBT", multi[1].commitmentKind)
+        assertEquals("بدهی", multi[1].purposeCategory)
+        assertEquals(25_000L, multi[1].totalAmountToman)
+        assertEquals("دیروز", multi[1].dueDateHint)
+        assertEquals(-1, multi[1].eventDayOffset)
+
+        assertEquals(null, multi[2].commitmentKind)
+        assertEquals("بستنی", multi[2].purposeCategory)
+        assertEquals(35_000L, multi[2].totalAmountToman)
+        assertEquals(0, multi[2].eventDayOffset)
+
+        // 2. Generalized commitment past-reference copula & possessive echo cleanup + preserving real "برای ..." subject
+        val gen1 = PersianVoiceSlangParserEngine.parseVoiceCommand("۱۰ میلیون طلب دارم مال پریروز بوده طلبم")
+        assertEquals("RECEIVABLE", gen1.commitmentKind)
+        assertEquals("طلب", gen1.purposeCategory)
+        assertEquals("پریروز", gen1.dueDateHint)
+        assertEquals(-2, gen1.eventDayOffset)
+
+        val gen2 = PersianVoiceSlangParserEngine.parseVoiceCommand("۵ میلیون قسط دارم برای هفته پیش بوده قسطم")
+        assertEquals("DEBT", gen2.commitmentKind)
+        assertEquals("LOAN_INSTALLMENT", gen2.commitmentCategory)
+        assertEquals("قسط", gen2.purposeCategory)
+        assertEquals("هفته پیش", gen2.dueDateHint)
+
+        val gen3 = PersianVoiceSlangParserEngine.parseVoiceCommand("۵ میلیون بدهی دارم برای تعمیر ماشین")
+        assertEquals("DEBT", gen3.commitmentKind)
+        assertEquals(true, gen3.purposeCategory.contains("تعمیر ماشین"))
+
+        // 3. Past relative Jalali date resolution across month boundary (1 Azar -> 30 Aban & 29 Aban)
+        val azar1Ts = JalaliCalendarUtils.jalaliDayStartMillis(1405, 9, 1) + 1L * 3_600_000L
+        assertEquals("۳۰ آبان ۱۴۰۵", JalaliCalendarUtils.resolveRelativeJalaliDate("دیروز", azar1Ts))
+        assertEquals("۲۹ آبان ۱۴۰۵", JalaliCalendarUtils.resolveRelativeJalaliDate("پریروز", azar1Ts))
+
+        // 4. Payday cycle offset navigation + auto-fallback when Day 1 of new cycle is empty
+        val aban28Ts = JalaliCalendarUtils.jalaliDayStartMillis(1405, 8, 28) + 12L * 3_600_000L
+        val txs = listOf(
+            CashflowTxSnapshot(1L, "INCOME", 10_000_000L, 10_000_000L, "بلو", aban28Ts),
+            CashflowTxSnapshot(2L, "EXPENSE", 3_500_000L, 3_500_000L, "بلو", aban28Ts + 600_000L)
+        )
+        val initialOffset = OrosiCashflowAnalyzer.resolveInitialPaydayCycleOffset(txs, 1, azar1Ts)
+        assertEquals(-1, initialOffset)
+        val prevSummary = OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle(txs, 1, 0L, azar1Ts, initialOffset)
+        assertEquals("۱ آبان تا ۳۰ آبان ۱۴۰۵", prevSummary.cycleLabel)
+        assertEquals(10_000_000L, prevSummary.totalIncomeToman)
+        assertEquals(3_500_000L, prevSummary.totalExpenseToman)
+        assertEquals(6_500_000L, prevSummary.netBalanceToman)
+
+        // 5. Home Hero Card shortfall invariant (real balance headline + shortfall indicator, never misleading 0)
+        val shortfall = OrosiCashflowAnalyzer.resolveHeroBalanceDisplay(2_432_702L, 24_000_000L)
+        assertEquals(true, shortfall.isShortfall)
+        assertEquals(2_432_702L, shortfall.headlineAmountToman)
+        assertEquals(21_567_298L, shortfall.shortfallAmountToman)
+
+        val normal = OrosiCashflowAnalyzer.resolveHeroBalanceDisplay(10_000_000L, 3_000_000L)
+        assertEquals(false, normal.isShortfall)
+        assertEquals(7_000_000L, normal.headlineAmountToman)
+        assertEquals(0L, normal.shortfallAmountToman)
+    }
+
+    @Test
     fun testFullOrosiRegressionAndStressSuitePasses100Percent() {
         val report = com.example.domain.OrosiRegressionSuite.runFullRegressionAndStressSuite()
         for (r in report.results) {
@@ -1334,8 +1404,8 @@ class ExampleUnitTest {
         }
         assertEquals(true, report.allPassed)
         assertEquals(com.example.domain.OrosiRegressionSuite.EXPECTED_TOTAL_CASES, report.totalCount)
-        assertEquals(72, report.totalCount)
-        assertEquals(72, report.passedCount)
+        assertEquals(76, report.totalCount)
+        assertEquals(76, report.passedCount)
     }
 }
 

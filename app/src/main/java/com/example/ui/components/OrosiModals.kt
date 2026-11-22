@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -45,6 +46,8 @@ import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
@@ -81,6 +84,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -710,21 +714,14 @@ fun VoiceOverlayBottomSheet(
                         }
 
                         val isCommItem = targetTx == null && item.isCommitment
-                        val cardBorderColor = when {
-                            isCommItem && item.isIncome -> NishapurTurquoiseBright.copy(alpha = 0.60f)
-                            isCommItem -> RoyalAmethystSoft.copy(alpha = 0.65f)
-                            item.isIncome -> NishapurTurquoiseBright.copy(alpha = 0.55f)
-                            else -> RubyRoseSoft.copy(alpha = 0.50f)
-                        }
-                        val cardAccentColor = when {
-                            isCommItem && item.isIncome -> NishapurTurquoiseSoft
-                            isCommItem -> RoyalAmethystSoft
-                            item.isIncome -> NishapurTurquoiseSoft
-                            else -> RubyRoseSoft
-                        }
+                        val commDateShort = formatVoiceCommitmentDateShort(
+                            dueDateHint = item.dueDateHint,
+                            explicitJalaliDate = item.explicitJalaliDate,
+                            eventDayOffset = item.eventDayOffset
+                        )
                         val destBadgeText = when {
-                            isCommItem && item.dueDateHint.isNotBlank() ->
-                                "${item.commitmentSubLabel.ifBlank { "تعهد" }} • ${item.dueDateHint}"
+                            isCommItem && commDateShort.isNotBlank() ->
+                                "تعهد • ${item.commitmentSubLabel.ifBlank { if (item.isIncome) "طلب" else "بدهی" }} • $commDateShort"
                             isCommItem && item.commitmentSubLabel.isNotBlank() ->
                                 "تعهد • ${item.commitmentSubLabel}"
                             isCommItem -> "ثبت در تعهدات"
@@ -736,13 +733,18 @@ fun VoiceOverlayBottomSheet(
                                 "تراکنش • ${PersianNumberUtils.toPersianDigits((-item.eventDayOffset).toString())} روز پیش"
                             else -> "تراکنش • امروز"
                         }
+                        val cardContainerBg = if (isCommItem) {
+                            Color(0xFF231639) // Unmistakable deep Royal Amethyst fill for commitments
+                        } else {
+                            OrosiSurfaceContainer // Calm neutral slate fill for regular transactions
+                        }
 
+                        // Borderless container: bright borders/glow are reserved strictly for clickable buttons!
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(18.dp))
-                                .background(OrosiSurfaceHigh)
-                                .border(1.2.dp, cardBorderColor, RoundedCornerShape(18.dp))
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(cardContainerBg)
                                 .padding(14.dp)
                                 .testTag("multi_voice_item_$idx"),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -763,7 +765,7 @@ fun VoiceOverlayBottomSheet(
                                             .size(26.dp)
                                             .clip(CircleShape)
                                             .background(
-                                                if (isCommItem) RoyalAmethyst.copy(alpha = 0.45f)
+                                                if (isCommItem) RoyalAmethyst.copy(alpha = 0.65f)
                                                 else if (item.isIncome) NishapurTurquoiseDeep
                                                 else RubyRose.copy(alpha = 0.35f)
                                             ),
@@ -782,7 +784,7 @@ fun VoiceOverlayBottomSheet(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(10.dp))
                                             .background(
-                                                if (isCommItem) RoyalAmethyst.copy(alpha = 0.22f)
+                                                if (isCommItem) RoyalAmethyst.copy(alpha = 0.34f)
                                                 else PersianLapis.copy(alpha = 0.55f)
                                             )
                                             .padding(horizontal = 9.dp, vertical = 4.dp)
@@ -796,7 +798,7 @@ fun VoiceOverlayBottomSheet(
                                         Text(
                                             text = destBadgeText,
                                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                            color = if (isCommItem) RoyalAmethystSoft else AlabasterSilk,
+                                            color = if (isCommItem) AlabasterSilk else AlabasterSilk,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
@@ -816,13 +818,12 @@ fun VoiceOverlayBottomSheet(
                                 )
                             }
 
-                            // Row 2: Unmistakable Tactile 2-Way Direction Toggle ("پرداختی | دریافتی" or "بدهی | طلب")
+                            // Row 2: Tactile 2-Way Direction Buttons (borderless track; bright borders strictly on buttons)
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(12.dp))
-                                    .background(OrosiSurfaceLow)
-                                    .border(1.dp, OrosiHairline, RoundedCornerShape(12.dp))
+                                    .background(Color.Black.copy(alpha = 0.24f))
                                     .padding(4.dp)
                                     .testTag("multi_voice_item_type_$idx"),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -831,10 +832,10 @@ fun VoiceOverlayBottomSheet(
                                     onClick = { if (targetTx == null) onSetMultiItemType(idx, false) },
                                     enabled = targetTx == null,
                                     shape = RoundedCornerShape(9.dp),
-                                    color = if (!item.isIncome) RubyRose.copy(alpha = 0.34f) else Color.Transparent,
+                                    color = if (!item.isIncome) RubyRose.copy(alpha = 0.38f) else OrosiSurfaceHigh.copy(alpha = 0.55f),
                                     border = androidx.compose.foundation.BorderStroke(
-                                        width = if (!item.isIncome) 1.2.dp else 0.dp,
-                                        color = if (!item.isIncome) RubyRoseSoft else Color.Transparent
+                                        width = if (!item.isIncome) 1.3.dp else 0.9.dp,
+                                        color = if (!item.isIncome) RubyRoseSoft else PersianLapisLight.copy(alpha = 0.24f)
                                     ),
                                     modifier = Modifier
                                         .weight(1f)
@@ -856,7 +857,7 @@ fun VoiceOverlayBottomSheet(
                                         Text(
                                             text = if (isCommItem) "بدهی" else "پرداختی",
                                             style = MaterialTheme.typography.labelMedium.copy(
-                                                fontWeight = if (!item.isIncome) FontWeight.ExtraBold else FontWeight.Medium
+                                                fontWeight = if (!item.isIncome) FontWeight.ExtraBold else FontWeight.SemiBold
                                             ),
                                             color = if (!item.isIncome) AlabasterSilk else OrosiOnSurfaceVariant,
                                             maxLines = 1
@@ -868,10 +869,10 @@ fun VoiceOverlayBottomSheet(
                                     onClick = { if (targetTx == null) onSetMultiItemType(idx, true) },
                                     enabled = targetTx == null,
                                     shape = RoundedCornerShape(9.dp),
-                                    color = if (item.isIncome) NishapurTurquoiseDeep else Color.Transparent,
+                                    color = if (item.isIncome) NishapurTurquoiseDeep else OrosiSurfaceHigh.copy(alpha = 0.55f),
                                     border = androidx.compose.foundation.BorderStroke(
-                                        width = if (item.isIncome) 1.2.dp else 0.dp,
-                                        color = if (item.isIncome) NishapurTurquoiseBright else Color.Transparent
+                                        width = if (item.isIncome) 1.3.dp else 0.9.dp,
+                                        color = if (item.isIncome) NishapurTurquoiseBright else PersianLapisLight.copy(alpha = 0.24f)
                                     ),
                                     modifier = Modifier
                                         .weight(1f)
@@ -893,7 +894,7 @@ fun VoiceOverlayBottomSheet(
                                         Text(
                                             text = if (isCommItem) "طلب" else "دریافتی",
                                             style = MaterialTheme.typography.labelMedium.copy(
-                                                fontWeight = if (item.isIncome) FontWeight.ExtraBold else FontWeight.Medium
+                                                fontWeight = if (item.isIncome) FontWeight.ExtraBold else FontWeight.SemiBold
                                             ),
                                             color = if (item.isIncome) AlabasterSilk else OrosiOnSurfaceVariant,
                                             maxLines = 1
@@ -1039,7 +1040,7 @@ fun VoiceOverlayBottomSheet(
                         }
                     }
 
-                    // Clean Non-Overlapping Footer Summary Card
+                    // Clean Borderless Non-Overlapping Footer Summary Card
                     val hasMixedMulti = multiItems.any { it.isIncome } && multiItems.any { !it.isIncome }
                     val multiIncomeSum = multiItems.filter { it.isIncome }.sumOf { it.totalAmountToman }
                     val multiExpenseSum = multiItems.filter { !it.isIncome }.sumOf { it.totalAmountToman }
@@ -1049,7 +1050,6 @@ fun VoiceOverlayBottomSheet(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(16.dp))
                             .background(OrosiSurfaceContainer)
-                            .border(1.dp, PersianLapisLight.copy(alpha = 0.30f), RoundedCornerShape(16.dp))
                             .padding(horizontal = 14.dp, vertical = 12.dp)
                             .testTag("voice_manual_amount_input"),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1173,20 +1173,30 @@ fun VoiceOverlayBottomSheet(
                         }
                     }
                 } else {
+                    val isSingleCommitmentCard = targetTx == null && voiceState.commitmentKind != null
+                    val singleCardBg = if (isSingleCommitmentCard) {
+                        Color(0xFF231639) // Distinct filled Royal Amethyst surface for commitments
+                    } else {
+                        OrosiSurfaceContainer // Calm neutral borderless surface for transactions
+                    }
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(18.dp))
-                            .background(OrosiSurfaceHigh)
-                            .border(1.2.dp, NishapurTurquoiseBright.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(singleCardBg)
                             .padding(14.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         if (targetTx == null) {
                             val isSingleCommitment = voiceState.commitmentKind != null
+                            val singleCommDateShort = formatVoiceCommitmentDateShort(
+                                dueDateHint = voiceState.dueDateHint,
+                                explicitJalaliDate = voiceState.explicitJalaliDate,
+                                eventDayOffset = voiceState.eventDayOffset
+                            )
                             val singleDestLabel = when {
-                                isSingleCommitment && voiceState.dueDateHint.isNotBlank() ->
-                                    "${voiceState.commitmentSubLabel.ifBlank { "تعهد" }} • سررسید: ${voiceState.dueDateHint}"
+                                isSingleCommitment && singleCommDateShort.isNotBlank() ->
+                                    "تعهد • ${voiceState.commitmentSubLabel.ifBlank { if (voiceState.isIncome) "طلب" else "بدهی" }} • $singleCommDateShort"
                                 isSingleCommitment && voiceState.commitmentSubLabel.isNotBlank() ->
                                     "ثبت در تعهدات • ${voiceState.commitmentSubLabel}"
                                 isSingleCommitment -> "ثبت در بخش تعهدات (بدهی و طلب)"
@@ -1641,7 +1651,11 @@ private fun VoiceBankSmsMatchStrip(
                 Surface(
                     onClick = { onSetMatchedTxId(null) },
                     shape = RoundedCornerShape(10.dp),
-                    color = OrosiSurfaceContainer,
+                    color = OrosiSurfaceHigh,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.1.dp,
+                        PersianLapisLight.copy(alpha = 0.50f)
+                    ),
                     modifier = Modifier
                         .heightIn(min = 34.dp)
                         .testTag("voice_unlink_sms_$testTagSuffix")
@@ -1694,7 +1708,11 @@ private fun VoiceBankSmsMatchStrip(
         Surface(
             onClick = { onSetMatchedTxId(relinkOrSuggest.id) },
             shape = RoundedCornerShape(10.dp),
-            color = NishapurTurquoiseDeep.copy(alpha = 0.65f),
+            color = NishapurTurquoiseDeep.copy(alpha = 0.72f),
+            border = androidx.compose.foundation.BorderStroke(
+                1.2.dp,
+                NishapurTurquoiseBright.copy(alpha = 0.75f)
+            ),
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 40.dp)
@@ -1729,6 +1747,31 @@ private fun VoiceBankSmsMatchStrip(
     }
 }
 
+private fun formatVoiceCommitmentDateShort(
+    dueDateHint: String,
+    explicitJalaliDate: String,
+    eventDayOffset: Int
+): String {
+    val cleanHint = dueDateHint.trim()
+    val resolvedDate = when {
+        explicitJalaliDate.isNotBlank() -> JalaliCalendarUtils.stripYearFromJalaliDate(explicitJalaliDate)
+        cleanHint.isNotBlank() -> JalaliCalendarUtils.stripYearFromJalaliDate(
+            JalaliCalendarUtils.resolveRelativeJalaliDate(cleanHint)
+        )
+        eventDayOffset != 0 -> JalaliCalendarUtils.stripYearFromJalaliDate(
+            JalaliCalendarUtils.timestampToJalali(System.currentTimeMillis() + eventDayOffset * 86_400_000L).dateWithYear
+        )
+        else -> ""
+    }
+    return when {
+        cleanHint.isNotBlank() && resolvedDate.isNotBlank() && !resolvedDate.startsWith(cleanHint) ->
+            "$cleanHint ($resolvedDate)"
+        cleanHint.isNotBlank() -> cleanHint
+        resolvedDate.isNotBlank() -> resolvedDate
+        else -> ""
+    }
+}
+
 private data class CashflowBadgeVisuals(
     val label: String,
     val bg: Color,
@@ -1751,23 +1794,24 @@ private fun VoiceDestinationControlSection(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         if (!isCommitment) {
+            // Clickable button ONLY gets a luminous border
             Surface(
                 onClick = onToggleDestination,
                 shape = RoundedCornerShape(12.dp),
-                color = RoyalAmethyst.copy(alpha = 0.16f),
+                color = RoyalAmethyst.copy(alpha = 0.24f),
                 border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    RoyalAmethystSoft.copy(alpha = 0.42f)
+                    1.2.dp,
+                    RoyalAmethystSoft.copy(alpha = 0.78f)
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 40.dp)
+                    .heightIn(min = 42.dp)
                     .testTag("voice_dest_toggle_$testTagPrefix")
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 12.dp, vertical = 9.dp),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -1781,7 +1825,7 @@ private fun VoiceDestinationControlSection(
                     Text(
                         text = "ثبت در بخش تعهدات (قسط، چک یا بدهی)",
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = RoyalAmethystSoft,
+                        color = AlabasterSilk,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -1789,16 +1833,16 @@ private fun VoiceDestinationControlSection(
             }
         } else {
             val destSummary = if (dueDateHint.isNotBlank()) {
-                "مقصد: بخش تعهدات ✓ • سررسید: $dueDateHint"
+                "مقصد: بخش تعهدات ✓ • $dueDateHint"
             } else {
                 "مقصد: بخش تعهدات ✓"
             }
+            // Borderless status strip; ONLY the action button on the left has a bright interactive border
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
-                    .background(RoyalAmethyst.copy(alpha = 0.20f))
-                    .border(1.dp, RoyalAmethystSoft.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                    .background(Color.Black.copy(alpha = 0.24f))
                     .padding(horizontal = 10.dp, vertical = 7.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
@@ -1816,29 +1860,33 @@ private fun VoiceDestinationControlSection(
                     )
                     Text(
                         text = destSummary,
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
-                        color = AlabasterSilk,
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = AlabasterSilk.copy(alpha = 0.90f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(8.dp))
                 Surface(
                     onClick = onToggleDestination,
-                    shape = RoundedCornerShape(9.dp),
-                    color = OrosiSurfaceContainer,
+                    shape = RoundedCornerShape(10.dp),
+                    color = PersianLapis.copy(alpha = 0.85f),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.2.dp,
+                        PersianLapisLight.copy(alpha = 0.78f)
+                    ),
                     modifier = Modifier
-                        .heightIn(min = 32.dp)
+                        .heightIn(min = 34.dp)
                         .testTag("voice_dest_toggle_$testTagPrefix")
                 ) {
                     Box(
                         contentAlignment = Alignment.Center,
-                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                     ) {
                         Text(
-                            text = "ثبت به عنوان تراکنش",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = PersianLapisLight,
+                            text = "تغییر به تراکنش",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                            color = AlabasterSilk,
                             maxLines = 1
                         )
                     }
@@ -1855,7 +1903,7 @@ private fun VoiceDestinationControlSection(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .background(OrosiSurfaceLow)
+                        .background(Color.Black.copy(alpha = 0.24f))
                         .padding(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
@@ -1864,10 +1912,10 @@ private fun VoiceDestinationControlSection(
                         Surface(
                             onClick = { onSelectCommitmentCategory(catKey) },
                             shape = RoundedCornerShape(9.dp),
-                            color = if (selected) RoyalAmethyst.copy(alpha = 0.45f) else Color.Transparent,
+                            color = if (selected) RoyalAmethyst.copy(alpha = 0.62f) else OrosiSurfaceHigh.copy(alpha = 0.45f),
                             border = androidx.compose.foundation.BorderStroke(
-                                width = if (selected) 1.dp else 0.dp,
-                                color = if (selected) RoyalAmethystSoft else Color.Transparent
+                                width = if (selected) 1.3.dp else 0.9.dp,
+                                color = if (selected) RoyalAmethystSoft else PersianLapisLight.copy(alpha = 0.24f)
                             ),
                             modifier = Modifier
                                 .weight(1f)
@@ -1881,7 +1929,7 @@ private fun VoiceDestinationControlSection(
                                 Text(
                                     text = label,
                                     style = MaterialTheme.typography.labelSmall.copy(
-                                        fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium
+                                        fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold
                                     ),
                                     color = if (selected) AlabasterSilk else OrosiOnSurfaceVariant,
                                     maxLines = 1,
@@ -1907,20 +1955,34 @@ fun HeroMathBreakdownBottomSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var isMoreDetailsExpanded by remember { mutableStateOf(false) }
 
-    val summary = remember(transactions, settings.paydayStartDay, reservedCommitmentsToman) {
+    val txSnapshots = remember(transactions) {
+        transactions.map { tx ->
+            CashflowTxSnapshot(
+                id = tx.id,
+                type = tx.type,
+                totalAmountToman = tx.totalAmountToman,
+                userShareToman = tx.userShareToman,
+                bankName = tx.shortBankName,
+                timestamp = tx.timestamp
+            )
+        }
+    }
+
+    val initialOffset = remember(txSnapshots, settings.paydayStartDay) {
+        OrosiCashflowAnalyzer.resolveInitialPaydayCycleOffset(
+            transactions = txSnapshots,
+            paydayStartDay = settings.paydayStartDay
+        )
+    }
+    var cycleOffsetMonths by remember(initialOffset) { mutableIntStateOf(initialOffset) }
+    val canGoNextCycle = cycleOffsetMonths < 0
+
+    val summary = remember(txSnapshots, settings.paydayStartDay, reservedCommitmentsToman, cycleOffsetMonths) {
         OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle(
-            transactions = transactions.map { tx ->
-                CashflowTxSnapshot(
-                    id = tx.id,
-                    type = tx.type,
-                    totalAmountToman = tx.totalAmountToman,
-                    userShareToman = tx.userShareToman,
-                    bankName = tx.shortBankName,
-                    timestamp = tx.timestamp
-                )
-            },
+            transactions = txSnapshots,
             paydayStartDay = settings.paydayStartDay,
-            reservedCommitmentsToman = reservedCommitmentsToman
+            reservedCommitmentsToman = reservedCommitmentsToman,
+            cycleOffsetMonths = cycleOffsetMonths
         )
     }
 
@@ -1938,7 +2000,7 @@ fun HeroMathBreakdownBottomSheet(
             textColor = SaffronGoldLight
         )
         CashflowHealthStatus.DEFICIT -> CashflowBadgeVisuals(
-            label = "کسری تراز ماه جاری",
+            label = "کسری تراز ماه",
             bg = RubyRose.copy(alpha = 0.20f),
             dotColor = RubyRoseSoft,
             textColor = RubyRoseSoft
@@ -1972,39 +2034,18 @@ fun HeroMathBreakdownBottomSheet(
                 .testTag("hero_math_sheet"),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // 1. Serene Header + Borderless Cycle Subtitle + Borderless Tonal Status Indicator
+            // 1. Serene Header + Borderless Tonal Status Indicator
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                Text(
+                    text = "ترازنامه ماه حقوقی",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold),
+                    color = AlabasterSilk,
                     modifier = Modifier.weight(1f)
-                ) {
-                    Text(
-                        text = "ترازنامه ماه حقوقی",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold),
-                        color = AlabasterSilk
-                    )
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.EventNote,
-                            contentDescription = null,
-                            tint = OrosiOnSurfaceVariant,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Text(
-                            text = summary.cycleLabel,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = OrosiOnSurfaceVariant,
-                            modifier = Modifier.testTag("hero_math_cycle_label")
-                        )
-                    }
-                }
+                )
 
                 Spacer(modifier = Modifier.width(8.dp))
 
@@ -2028,6 +2069,99 @@ fun HeroMathBreakdownBottomSheet(
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                         color = badgeVisuals.textColor,
                         maxLines = 1
+                    )
+                }
+            }
+
+            // 1B. Calm Payday Cycle Switcher (< Prev Cycle | Label | Next Cycle >) matching TransactionsScreen
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(OrosiSurfaceContainer)
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(OrosiSurfaceHigh)
+                    ) {
+                        IconButton(
+                            onClick = { cycleOffsetMonths = (cycleOffsetMonths - 1).coerceAtLeast(-24) },
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .testTag("hero_math_prev_cycle_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ChevronRight,
+                                contentDescription = "ماه حقوقی قبل",
+                                tint = AlabasterSilk,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.EventNote,
+                            contentDescription = null,
+                            tint = NishapurTurquoiseSoft,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = summary.cycleLabel,
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            color = AlabasterSilk,
+                            modifier = Modifier.testTag("hero_math_cycle_label")
+                        )
+                    }
+
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (canGoNextCycle) OrosiSurfaceHigh else OrosiSurfaceHigh.copy(alpha = 0.35f)
+                            )
+                    ) {
+                        IconButton(
+                            onClick = { if (canGoNextCycle) cycleOffsetMonths += 1 },
+                            enabled = canGoNextCycle,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .testTag("hero_math_next_cycle_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ChevronLeft,
+                                contentDescription = "ماه حقوقی بعد",
+                                tint = if (canGoNextCycle) AlabasterSilk else OrosiOnSurfaceVariant.copy(alpha = 0.30f),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+
+                if (initialOffset == -1 && cycleOffsetMonths == -1) {
+                    Text(
+                        text = "در ماه جاری هنوز تراکنشی ثبت نشده؛ تراز ماه قبل نمایش داده شده است.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = OrosiOnSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("hero_math_auto_prev_hint")
                     )
                 }
             }
@@ -4379,7 +4513,12 @@ fun PaydayAndBackupBottomSheet(
     onResetDefault: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    var cycleLabel by remember(settings) { mutableStateOf(settings.paydayCycleLabel) }
+    val liveCurrentCycleLabel = remember(settings.paydayStartDay) {
+        JalaliCalendarUtils.currentPaydayCycleRange(settings.paydayStartDay).label
+    }
+    var cycleLabel by remember(settings, liveCurrentCycleLabel) {
+        mutableStateOf(liveCurrentCycleLabel)
+    }
     var paydayDayStr by remember(settings) {
         mutableStateOf(PersianNumberUtils.toPersianDigits(settings.paydayStartDay.toString()))
     }

@@ -30,7 +30,7 @@ data class RegressionSuiteReport(
  */
 object OrosiRegressionSuite {
 
-    const val EXPECTED_TOTAL_CASES = 72
+    const val EXPECTED_TOTAL_CASES = 76
 
     fun runFullRegressionAndStressSuite(): RegressionSuiteReport {
         val suiteStartNanos = System.nanoTime()
@@ -1386,6 +1386,101 @@ object OrosiRegressionSuite {
                 summary.reservedCommitmentsToman == 24_000_000L &&
                 summary.healthStatus == CashflowHealthStatus.DEFICIT
             ok to "net=${summary.netBalanceToman} • reserved=${summary.reservedCommitmentsToman} • status=${summary.healthStatus}"
+        }
+
+        // 73. Real user video (v2.7): "خوب ۵۰ تومن طلب دارم ۲۵ تومن بدهی دارم برای دیروز بوده بدهیم و ۳۵ هزار تومان خرج بستنی کردم امروز"
+        recordTest(
+            category = "پاکسازی عنوان و تاریخ تعهدات (v2.7)",
+            title = "حذف «برای دیروز بوده بدهیم» از عنوان بدهی و حفظ تاریخ «دیروز» در جمله سه‌موردی ویدیو",
+            inputSummary = "خوب ۵۰ تومن طلب دارم ۲۵ تومن بدهی دارم برای دیروز بوده بدهیم و ۳۵ هزار تومان خرج بستنی کردم امروز",
+            expectedSummary = "طلب(۵۰هزار) + بدهی(۲۵هزار • دیروز) + بستنی(۳۵هزار • امروز)"
+        ) {
+            val items = PersianVoiceSlangParserEngine.parseMultiVoiceCommands(
+                "خوب ۵۰ تومن طلب دارم ۲۵ تومن بدهی دارم برای دیروز بوده بدهیم و ۳۵ هزار تومان خرج بستنی کردم امروز"
+            )
+            val ok = items.size == 3 &&
+                items[0].commitmentKind == "RECEIVABLE" &&
+                items[0].purposeCategory == "طلب" &&
+                items[0].totalAmountToman == 50_000L &&
+                items[1].commitmentKind == "DEBT" &&
+                items[1].purposeCategory == "بدهی" &&
+                items[1].totalAmountToman == 25_000L &&
+                items[1].dueDateHint == "دیروز" &&
+                items[1].eventDayOffset == -1 &&
+                items[2].commitmentKind == null &&
+                items[2].purposeCategory == "بستنی" &&
+                items[2].totalAmountToman == 35_000L &&
+                items[2].eventDayOffset == 0
+            ok to items.joinToString(" | ") { "${it.purposeCategory}:${it.totalAmountToman}:${it.commitmentKind ?: "TX"}:date=${it.dueDateHint.ifBlank { it.eventDayOffset.toString() }}" }
+        }
+
+        // 74. Generalized commitment past-reference copula & possessive echo cleanup
+        recordTest(
+            category = "پاکسازی عنوان و تاریخ تعهدات (v2.7)",
+            title = "پالایش عمومی «مال پریروز بوده طلبم» و «برای هفته پیش بوده قسطم» + تبدیل تاریخ گذشته به شمسی",
+            inputSummary = "۱۰ میلیون طلب دارم مال پریروز بوده طلبم + ۵ میلیون قسط دارم برای هفته پیش بوده قسطم",
+            expectedSummary = "عنوان «طلب» (پریروز) و «قسط» (هفته پیش) + تبدیل دقیق به تاریخ شمسی"
+        ) {
+            val c1 = PersianVoiceSlangParserEngine.parseVoiceCommand("۱۰ میلیون طلب دارم مال پریروز بوده طلبم")
+            val c2 = PersianVoiceSlangParserEngine.parseVoiceCommand("۵ میلیون قسط دارم برای هفته پیش بوده قسطم")
+            val azar1Ts = JalaliCalendarUtils.jalaliDayStartMillis(1405, 9, 1) + 10L * 3_600_000L
+            val yesterdayJalali = JalaliCalendarUtils.resolveRelativeJalaliDate("دیروز", azar1Ts)
+            val twoDaysAgoJalali = JalaliCalendarUtils.resolveRelativeJalaliDate("پریروز", azar1Ts)
+            val ok = c1.commitmentKind == "RECEIVABLE" &&
+                c1.purposeCategory == "طلب" &&
+                c1.dueDateHint == "پریروز" &&
+                c1.eventDayOffset == -2 &&
+                c2.commitmentKind == "DEBT" &&
+                c2.commitmentCategory == "LOAN_INSTALLMENT" &&
+                c2.purposeCategory == "قسط" &&
+                c2.dueDateHint == "هفته پیش" &&
+                yesterdayJalali == "۳۰ آبان ۱۴۰۵" &&
+                twoDaysAgoJalali == "۲۹ آبان ۱۴۰۵"
+            ok to "${c1.purposeCategory}(${c1.dueDateHint}) • ${c2.purposeCategory}(${c2.dueDateHint}) • دیروز=$yesterdayJalali"
+        }
+
+        // 75. Payday cycle offset navigation + auto-fallback to previous cycle on Day 1 of empty new month (1 Azar -> Aban)
+        recordTest(
+            category = "ترازنامه ماه حقوقی و جابه‌جایی ماه (v2.7)",
+            title = "سوییچ خودکار ترازنامه در ۱ آذر خالی به ماه قبل (آبان) و محاسبه تراز با cycleOffsetMonths",
+            inputSummary = "تاریخ ۱ آذر ۱۴۰۵ (خالی) با تراکنش‌های آبان ۱۴۰۵",
+            expectedSummary = "initialOffset = -1 • بازه «۱ آبان تا ۳۰ آبان ۱۴۰۵» با جمع واقعی آبان"
+        ) {
+            val azar1Ts = JalaliCalendarUtils.jalaliDayStartMillis(1405, 9, 1) + 1L * 3_600_000L
+            val aban28Ts = JalaliCalendarUtils.jalaliDayStartMillis(1405, 8, 28) + 12L * 3_600_000L
+            val txs = listOf(
+                CashflowTxSnapshot(1L, "INCOME", 10_000_000L, 10_000_000L, "بلو", aban28Ts),
+                CashflowTxSnapshot(2L, "EXPENSE", 3_500_000L, 3_500_000L, "بلو", aban28Ts + 600_000L)
+            )
+            val initialOffset = OrosiCashflowAnalyzer.resolveInitialPaydayCycleOffset(txs, 1, azar1Ts)
+            val prevSummary = OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle(txs, 1, 0L, azar1Ts, initialOffset)
+            val currSummary = OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle(txs, 1, 0L, azar1Ts, 0)
+            val ok = initialOffset == -1 &&
+                prevSummary.cycleLabel == "۱ آبان تا ۳۰ آبان ۱۴۰۵" &&
+                prevSummary.totalIncomeToman == 10_000_000L &&
+                prevSummary.totalExpenseToman == 3_500_000L &&
+                prevSummary.netBalanceToman == 6_500_000L &&
+                currSummary.cycleLabel == "۱ آذر تا ۳۰ آذر ۱۴۰۵" &&
+                currSummary.totalIncomeToman == 0L
+            ok to "offset=$initialOffset • prev=${prevSummary.cycleLabel}(net=${prevSummary.netBalanceToman}) • curr=${currSummary.cycleLabel}"
+        }
+
+        // 76. Home Hero Card shortfall invariant: NEVER show misleading 0 Toman when real bank cash exists
+        recordTest(
+            category = "کارت وضعیت مالی و کسری تعهدات (v2.7)",
+            title = "نمایش موجودی واقعی بانک (۲,۴۳۲,۷۰۲) به جای ۰ تومان هنگام بیش‌بودن تعهدات (۲۴ میلیون) + محاسبه کسری",
+            inputSummary = "موجودی کل ۲,۴۳۲,۷۰۲ تومان • تعهدات ۲۴,۰۰۰,۰۰۰ تومان",
+            expectedSummary = "تیتر = ۲,۴۳۲,۷۰۲ • isShortfall=true • کسری = ۲۱,۵۶۷,۲۹۸"
+        ) {
+            val shortfallDisplay = OrosiCashflowAnalyzer.resolveHeroBalanceDisplay(2_432_702L, 24_000_000L)
+            val normalDisplay = OrosiCashflowAnalyzer.resolveHeroBalanceDisplay(10_000_000L, 3_000_000L)
+            val ok = shortfallDisplay.isShortfall &&
+                shortfallDisplay.headlineAmountToman == 2_432_702L &&
+                shortfallDisplay.shortfallAmountToman == 21_567_298L &&
+                !normalDisplay.isShortfall &&
+                normalDisplay.headlineAmountToman == 7_000_000L &&
+                normalDisplay.shortfallAmountToman == 0L
+            ok to "headline=${shortfallDisplay.headlineAmountToman} • shortfall=${shortfallDisplay.shortfallAmountToman} • normal=${normalDisplay.headlineAmountToman}"
         }
 
         val totalMs = ((System.nanoTime() - suiteStartNanos) / 1_000_000L).coerceAtLeast(1L)
