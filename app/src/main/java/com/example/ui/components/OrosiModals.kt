@@ -70,6 +70,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -128,6 +129,9 @@ import com.example.ui.theme.NishapurTurquoise
 import com.example.ui.theme.NishapurTurquoiseBright
 import com.example.ui.theme.NishapurTurquoiseDeep
 import com.example.ui.theme.NishapurTurquoiseSoft
+import com.example.ui.theme.OrosiBalanceDailyCardBg
+import com.example.ui.theme.OrosiBalanceExpenseCardBg
+import com.example.ui.theme.OrosiBalanceIncomeCardBg
 import com.example.ui.theme.OrosiHairline
 import com.example.ui.theme.OrosiOnSurfaceVariant
 import com.example.ui.theme.OrosiSurfaceContainer
@@ -150,6 +154,23 @@ private fun formatAmountTextFieldValue(newValue: TextFieldValue): TextFieldValue
         text = formatted,
         selection = TextRange(formatted.length)
     )
+}
+
+internal fun smartBankTagExamples(amountToman: Long, isIncome: Boolean): String {
+    return if (isIncome) {
+        when {
+            amountToman >= 5_000_000L -> "حقوق، فروش کالا، تسویه حساب"
+            amountToman >= 500_000L -> "فروش، برگشت وجه، تسویه دوست"
+            else -> "تسویه دُنگ، برگشت پول، هدیه"
+        }
+    } else {
+        when {
+            amountToman >= 10_000_000L -> "اجاره، قسط، خرید لوازم"
+            amountToman >= 1_000_000L -> "خرید فروشگاه، لباس، داروخانه، قسط"
+            amountToman >= 250_000L -> "سوپرمارکت، رستوران، بنزین، خرید آنلاین"
+            else -> "نانوایی، تاکسی، شارژ، کافه"
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -359,7 +380,7 @@ fun VoiceOverlayBottomSheet(
     }
 
     val infiniteTransition = rememberInfiniteTransition(label = "voiceOverlayWave")
-    val phase by infiniteTransition.animateFloat(
+    val phaseState = infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 6.28f,
         animationSpec = infiniteRepeatable(
@@ -461,6 +482,7 @@ fun VoiceOverlayBottomSheet(
                     val barWidth = spacing * 0.85f
                     val centerY = size.height / 2f
 
+                    val phase = phaseState.value
                     for (i in 0 until barCount) {
                         val norm = i.toFloat() / barCount.toFloat()
                         val envelope = sin(norm * Math.PI).toFloat()
@@ -629,24 +651,26 @@ fun VoiceOverlayBottomSheet(
                     Text(
                         when {
                             targetTx != null && targetTx.type == "INCOME" ->
-                                "این واریزی از کجا اومد؟ (مثلاً: حقوق، تسویه علی)"
+                                "این واریزی از کجا اومد؟ (مثلاً: ${smartBankTagExamples(targetTx.totalAmountToman, isIncome = true)})"
                             targetTx != null ->
-                                "بابتِ این تراکنش بانکی (مثلاً: پفک، شارژ ایرانسل)"
+                                "بابتِ این تراکنش بانکی (مثلاً: ${smartBankTagExamples(targetTx.totalAmountToman, isIncome = false)})"
                             else ->
                                 "جمله یا توضیح تراکنش (مثلاً: ۷۰ تومن نانوایی)"
-                        }
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 },
                 placeholder = {
                     Text(
                         when {
-                            targetTx != null && targetTx.type == "INCOME" ->
-                                "مثلاً: حقوق، واریز کارفرما، برگشت پول..."
                             targetTx != null ->
-                                "مثلاً: پفک، شارژ ایرانسل، نانوایی..."
+                                "مثلاً: ${smartBankTagExamples(targetTx.totalAmountToman, isIncome = targetTx.type == "INCOME")}..."
                             else ->
                                 "مثلاً: ۷۰ تومن نانوایی یا ۵۰ تومن طلب دارم..."
-                        }
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 },
                 modifier = Modifier
@@ -2064,6 +2088,9 @@ fun HeroMathBreakdownBottomSheet(
     transactions: List<TransactionEntity>,
     reservedCommitmentsToman: Long,
     futureCommitmentsToman: Long = 0L,
+    commitments: List<CommitmentEntity> = emptyList(),
+    isSyncingCycleMonths: Boolean = false,
+    onEnsureCycleMonthsSynced: (List<Int>) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -2090,14 +2117,41 @@ fun HeroMathBreakdownBottomSheet(
     }
     var cycleOffsetMonths by remember(initialOffset) { mutableIntStateOf(initialOffset) }
     val canGoNextCycle = cycleOffsetMonths < 0
+    val isCurrentCycle = cycleOffsetMonths == 0
 
-    val summary = remember(txSnapshots, settings.paydayStartDay, reservedCommitmentsToman, cycleOffsetMonths) {
+    // Scope commitments strictly to the selected payday cycle so current/future installments never leak onto past months
+    val cycleCommitmentsToman = remember(commitments, settings.paydayStartDay, cycleOffsetMonths, reservedCommitmentsToman) {
+        if (commitments.isNotEmpty()) {
+            commitments.filter { c ->
+                !c.isSettled &&
+                    (c.category == "SAYYAD_ISSUED" || c.category == "LOAN_INSTALLMENT") &&
+                    OrosiCashflowAnalyzer.isCommitmentDueInCycle(
+                        dueDateJalali = c.dueDateStr,
+                        paydayStartDay = settings.paydayStartDay,
+                        cycleOffsetMonths = cycleOffsetMonths
+                    )
+            }.sumOf { it.amountToman }
+        } else if (cycleOffsetMonths == 0) {
+            reservedCommitmentsToman
+        } else {
+            0L
+        }
+    }
+
+    val summary = remember(txSnapshots, settings.paydayStartDay, cycleCommitmentsToman, cycleOffsetMonths) {
         OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle(
             transactions = txSnapshots,
             paydayStartDay = settings.paydayStartDay,
-            reservedCommitmentsToman = reservedCommitmentsToman,
+            reservedCommitmentsToman = cycleCommitmentsToman,
             cycleOffsetMonths = cycleOffsetMonths
         )
+    }
+
+    // Automatically lazy-sync any Jalali months touched by the selected payday cycle (e.g. مهر / شهریور)
+    LaunchedEffect(summary.cycleYearMonthKeys) {
+        if (summary.cycleYearMonthKeys.isNotEmpty()) {
+            onEnsureCycleMonthsSynced(summary.cycleYearMonthKeys)
+        }
     }
 
     val badgeVisuals = when (summary.healthStatus) {
@@ -2127,10 +2181,15 @@ fun HeroMathBreakdownBottomSheet(
         CashflowHealthStatus.DEFICIT -> RubyRoseSoft
     }
 
-    val moreDetailsSubtitle = if (summary.excludedSelfTransferPairs > 0) {
-        "قسط و چک، موجودی کل و ${PersianNumberUtils.toPersianDigits(summary.excludedSelfTransferPairs.toString())} انتقال خودی"
-    } else {
-        "قسط و چک و موجودی کل حساب‌ها"
+    val moreDetailsSubtitle = when {
+        isCurrentCycle && summary.excludedSelfTransferPairs > 0 ->
+            "قسط و چک، موجودی کل و ${PersianNumberUtils.toPersianDigits(summary.excludedSelfTransferPairs.toString())} انتقال خودی"
+        isCurrentCycle ->
+            "قسط و چک و موجودی فعلی حساب‌ها"
+        summary.excludedSelfTransferPairs > 0 ->
+            "تعهدات آن ماه و ${PersianNumberUtils.toPersianDigits(summary.excludedSelfTransferPairs.toString())} انتقال خودی"
+        else ->
+            "تعهدات سررسید آن ماه و آمار دوره"
     }
 
     ModalBottomSheet(
@@ -2187,7 +2246,7 @@ fun HeroMathBreakdownBottomSheet(
                 }
             }
 
-            // 1B. Calm Payday Cycle Switcher (< Prev Cycle | Label | Next Cycle >) matching TransactionsScreen
+            // 1B. Calm Payday Cycle Switcher (< Prev Cycle | Label | Next Cycle >) with 48dp accessible touch targets
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -2197,22 +2256,22 @@ fun HeroMathBreakdownBottomSheet(
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(16.dp))
                         .background(OrosiSurfaceHigh)
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        contentAlignment = Alignment.Center,
+                    IconButton(
+                        onClick = { cycleOffsetMonths = (cycleOffsetMonths - 1).coerceAtLeast(-24) },
                         modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(OrosiSurfaceContainer)
+                            .size(48.dp)
+                            .testTag("hero_math_prev_cycle_button")
                     ) {
-                        IconButton(
-                            onClick = { cycleOffsetMonths = (cycleOffsetMonths - 1).coerceAtLeast(-24) },
+                        Box(
+                            contentAlignment = Alignment.Center,
                             modifier = Modifier
-                                .fillMaxSize()
-                                .testTag("hero_math_prev_cycle_button")
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(OrosiSurfaceContainer)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.ChevronRight,
@@ -2241,21 +2300,21 @@ fun HeroMathBreakdownBottomSheet(
                         )
                     }
 
-                    Box(
-                        contentAlignment = Alignment.Center,
+                    IconButton(
+                        onClick = { if (canGoNextCycle) cycleOffsetMonths += 1 },
+                        enabled = canGoNextCycle,
                         modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (canGoNextCycle) OrosiSurfaceContainer else OrosiSurfaceContainer.copy(alpha = 0.35f)
-                            )
+                            .size(48.dp)
+                            .testTag("hero_math_next_cycle_button")
                     ) {
-                        IconButton(
-                            onClick = { if (canGoNextCycle) cycleOffsetMonths += 1 },
-                            enabled = canGoNextCycle,
+                        Box(
+                            contentAlignment = Alignment.Center,
                             modifier = Modifier
-                                .fillMaxSize()
-                                .testTag("hero_math_next_cycle_button")
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (canGoNextCycle) OrosiSurfaceContainer else OrosiSurfaceContainer.copy(alpha = 0.35f)
+                                )
                         ) {
                             Icon(
                                 imageVector = Icons.Default.ChevronLeft,
@@ -2264,6 +2323,30 @@ fun HeroMathBreakdownBottomSheet(
                                 modifier = Modifier.size(18.dp)
                             )
                         }
+                    }
+                }
+
+                if (isSyncingCycleMonths) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "در حال خواندن پیامک‌های این دوره...",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = NishapurTurquoiseSoft
+                        )
+                        LinearProgressIndicator(
+                            color = NishapurTurquoiseBright,
+                            trackColor = OrosiSurfaceContainer,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(3.dp)
+                                .clip(RoundedCornerShape(50))
+                        )
                     }
                 }
 
@@ -2289,7 +2372,7 @@ fun HeroMathBreakdownBottomSheet(
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(20.dp))
-                        .background(Color(0xFF133A42))
+                        .background(OrosiBalanceIncomeCardBg)
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
@@ -2334,7 +2417,7 @@ fun HeroMathBreakdownBottomSheet(
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(20.dp))
-                        .background(Color(0xFF391F2E))
+                        .background(OrosiBalanceExpenseCardBg)
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
@@ -2404,25 +2487,35 @@ fun HeroMathBreakdownBottomSheet(
                 )
             }
 
-            // 4. Daily Safe Budget Hero Card with Transparent 1-Line Formula Caption
+            // 4. Cycle-Accurate Daily Card: Current Cycle = Daily Safe Budget | Past Cycle = Historical Daily Average Expense
             val remainingDaysToPayday = remember(settings.paydayStartDay) {
                 JalaliCalendarUtils.calculateRemainingDaysToPayday(settings.paydayStartDay).coerceIn(1, 30)
             }
-            val freeCashForDaily = (settings.monthlyBalanceToman - reservedCommitmentsToman).coerceAtLeast(0L)
-            val dailyFormulaCaption = when {
-                reservedCommitmentsToman > settings.monthlyBalanceToman && settings.monthlyBalanceToman > 0L ->
-                    "تعهدات این ماه بیشتر از موجودی فعلی حساب‌ها است"
-                freeCashForDaily > 0L ->
-                    "موجودی آزاد فعلی (${PersianNumberUtils.formatToman(freeCashForDaily, showUnit = false)}) ÷ ${PersianNumberUtils.toPersianDigits(remainingDaysToPayday.toString())} روز تا پایان ماه حقوقی"
-                else ->
-                    "بر اساس موجودی آزاد فعلی ÷ ${PersianNumberUtils.toPersianDigits(remainingDaysToPayday.toString())} روز باقی‌مانده"
+            val freeCashForDaily = (settings.monthlyBalanceToman - cycleCommitmentsToman).coerceAtLeast(0L)
+            val dailyCardTitle = if (isCurrentCycle) "سهم خرجِ روزانه پیشنهادی" else "میانگین خرج روزانه این ماه"
+            val dailyCardAmount = if (isCurrentCycle) {
+                PersianNumberUtils.roundDownToCleanThousands(settings.dailySafeBudgetToman)
+            } else {
+                summary.totalExpenseToman / summary.cycleDaysCount.coerceAtLeast(1)
+            }
+            val dailyFormulaCaption = if (isCurrentCycle) {
+                when {
+                    cycleCommitmentsToman > settings.monthlyBalanceToman && settings.monthlyBalanceToman > 0L ->
+                        "تعهدات این ماه بیشتر از موجودی فعلی حساب‌ها است"
+                    freeCashForDaily > 0L ->
+                        "موجودی آزاد فعلی (${PersianNumberUtils.formatToman(freeCashForDaily, showUnit = false)}) ÷ ${PersianNumberUtils.toPersianDigits(remainingDaysToPayday.toString())} روز تا پایان ماه حقوقی"
+                    else ->
+                        "بر اساس موجودی آزاد فعلی ÷ ${PersianNumberUtils.toPersianDigits(remainingDaysToPayday.toString())} روز باقی‌مانده"
+                }
+            } else {
+                "کل خرج مصرفی این دوره ÷ ${PersianNumberUtils.toPersianDigits(summary.cycleDaysCount.toString())} روز ماه حقوقی"
             }
 
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(20.dp))
-                    .background(Color(0xFF1D3550))
+                    .background(OrosiBalanceDailyCardBg)
                     .padding(horizontal = 16.dp, vertical = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
@@ -2432,14 +2525,14 @@ fun HeroMathBreakdownBottomSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "سهم خرجِ روزانه پیشنهادی",
+                        text = dailyCardTitle,
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                         color = AlabasterSilk,
                         modifier = Modifier.weight(1f)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     OrosiAmountText(
-                        amountToman = PersianNumberUtils.roundDownToCleanThousands(settings.dailySafeBudgetToman),
+                        amountToman = dailyCardAmount,
                         color = AlabasterSilk,
                         numberStyle = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp),
                         numberFontWeight = FontWeight.Black,
@@ -2456,20 +2549,20 @@ fun HeroMathBreakdownBottomSheet(
                 )
             }
 
-            // 5. Calm Collapsible "جزئیات بیشتر" Section (Lifted Tonal Card)
-            Surface(
-                onClick = { isMoreDetailsExpanded = !isMoreDetailsExpanded },
-                shape = RoundedCornerShape(16.dp),
-                color = OrosiSurfaceHigh,
+            // 5. Unified Single Expandable "جزئیات بیشتر" Card (Header + Internal Divider + Content)
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 50.dp)
-                    .testTag("hero_math_more_details_toggle")
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(OrosiSurfaceHigh)
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 11.dp),
+                        .heightIn(min = 52.dp)
+                        .clickable { isMoreDetailsExpanded = !isMoreDetailsExpanded }
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .testTag("hero_math_more_details_toggle"),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -2499,132 +2592,161 @@ fun HeroMathBreakdownBottomSheet(
                         modifier = Modifier.size(22.dp)
                     )
                 }
-            }
 
-            if (isMoreDetailsExpanded) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(OrosiSurfaceHigh)
-                        .padding(16.dp)
-                        .testTag("hero_math_more_details_content"),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    MonthlyReportAmountRow(
-                        label = "قسط و چک‌های همین ماه (جدا از تراز)",
-                        amountToman = summary.reservedCommitmentsToman,
-                        valueColor = RoyalAmethystSoft
+                if (isMoreDetailsExpanded) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .height(1.dp)
+                            .background(OrosiHairline)
                     )
 
-                    if (futureCommitmentsToman > 0L) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp)
+                            .testTag("hero_math_more_details_content"),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
                         MonthlyReportAmountRow(
-                            label = "قسط و چک‌های ماه‌های آینده",
-                            amountToman = futureCommitmentsToman,
-                            valueColor = OrosiOnSurfaceVariant
-                        )
-                    }
-
-                    MonthlyReportAmountRow(
-                        label = "موجودی کل حساب‌ها",
-                        amountToman = settings.monthlyBalanceToman,
-                        valueColor = NishapurTurquoiseSoft
-                    )
-
-                    if (summary.excludedSelfTransferPairs > 0) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(1.dp)
-                                .background(OrosiHairline)
+                            label = if (isCurrentCycle) {
+                                "قسط و چک‌های همین ماه (جدا از تراز)"
+                            } else {
+                                "قسط و چک‌های سررسید آن ماه"
+                            },
+                            amountToman = summary.reservedCommitmentsToman,
+                            valueColor = RoyalAmethystSoft
                         )
 
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("self_transfer_expand_row"),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(
-                                verticalArrangement = Arrangement.spacedBy(2.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text(
-                                    text = "انتقال بین‌حسابی خودی (کسرشده)",
-                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                    color = AlabasterSilk,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = "${PersianNumberUtils.toPersianDigits(summary.excludedSelfTransferPairs.toString())} جفت هم‌مبلغ از ورودی و خرج کسر شد",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = OrosiOnSurfaceVariant,
-                                    maxLines = 1
+                        if (isCurrentCycle) {
+                            if (futureCommitmentsToman > 0L) {
+                                MonthlyReportAmountRow(
+                                    label = "قسط و چک‌های ماه‌های آینده",
+                                    amountToman = futureCommitmentsToman,
+                                    valueColor = OrosiOnSurfaceVariant
                                 )
                             }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            OrosiAmountText(
-                                amountToman = summary.excludedSelfTransferTotalToman,
-                                color = OrosiOnSurfaceVariant,
-                                numberStyle = MaterialTheme.typography.labelLarge,
-                                numberFontWeight = FontWeight.Bold,
-                                unitStyle = MaterialTheme.typography.labelSmall,
-                                unitColor = OrosiOnSurfaceVariant.copy(alpha = 0.8f)
+
+                            MonthlyReportAmountRow(
+                                label = "موجودی فعلی کل حساب‌ها",
+                                amountToman = settings.monthlyBalanceToman,
+                                valueColor = NishapurTurquoiseSoft
                             )
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "تعداد تراکنش‌های این دوره",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = OrosiOnSurfaceVariant
+                                )
+                                Text(
+                                    text = "${PersianNumberUtils.toPersianDigits(summary.includedTransactionCount.toString())} تراکنش",
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                    color = AlabasterSilk
+                                )
+                            }
                         }
 
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(OrosiSurfaceLow)
-                                .padding(horizontal = 12.dp, vertical = 10.dp)
-                                .testTag("self_transfer_details_list"),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            summary.excludedSelfTransferDetails.forEachIndexed { idx, pair ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                        if (summary.excludedSelfTransferPairs > 0) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(1.dp)
+                                    .background(OrosiHairline)
+                            )
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("self_transfer_expand_row"),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                    modifier = Modifier.weight(1f)
                                 ) {
-                                    Column(
-                                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Text(
-                                            text = "از ${pair.fromBankName} ← به ${pair.toBankName}",
-                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                            color = AlabasterSilk,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = pair.dateTimeLabel,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = OrosiOnSurfaceVariant,
-                                            maxLines = 1
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    OrosiAmountText(
-                                        amountToman = pair.amountToman,
-                                        color = NishapurTurquoiseSoft,
-                                        numberStyle = MaterialTheme.typography.labelLarge,
-                                        numberFontWeight = FontWeight.Bold,
-                                        unitStyle = MaterialTheme.typography.labelSmall,
-                                        unitColor = NishapurTurquoiseSoft.copy(alpha = 0.8f)
+                                    Text(
+                                        text = "انتقال بین‌حسابی خودی (کسرشده)",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                        color = AlabasterSilk,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "${PersianNumberUtils.toPersianDigits(summary.excludedSelfTransferPairs.toString())} جفت هم‌مبلغ از ورودی و خرج کسر شد",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = OrosiOnSurfaceVariant,
+                                        maxLines = 1
                                     )
                                 }
-                                if (idx < summary.excludedSelfTransferDetails.lastIndex) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(1.dp)
-                                            .background(OrosiHairline)
-                                    )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                OrosiAmountText(
+                                    amountToman = summary.excludedSelfTransferTotalToman,
+                                    color = OrosiOnSurfaceVariant,
+                                    numberStyle = MaterialTheme.typography.labelLarge,
+                                    numberFontWeight = FontWeight.Bold,
+                                    unitStyle = MaterialTheme.typography.labelSmall,
+                                    unitColor = OrosiOnSurfaceVariant.copy(alpha = 0.8f)
+                                )
+                            }
+
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(OrosiSurfaceLow)
+                                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                                    .testTag("self_transfer_details_list"),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                summary.excludedSelfTransferDetails.forEachIndexed { idx, pair ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(
+                                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Text(
+                                                text = "از ${pair.fromBankName} ← به ${pair.toBankName}",
+                                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = AlabasterSilk,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = pair.dateTimeLabel,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = OrosiOnSurfaceVariant,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        OrosiAmountText(
+                                            amountToman = pair.amountToman,
+                                            color = NishapurTurquoiseSoft,
+                                            numberStyle = MaterialTheme.typography.labelLarge,
+                                            numberFontWeight = FontWeight.Bold,
+                                            unitStyle = MaterialTheme.typography.labelSmall,
+                                            unitColor = NishapurTurquoiseSoft.copy(alpha = 0.8f)
+                                        )
+                                    }
+                                    if (idx < summary.excludedSelfTransferDetails.lastIndex) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(1.dp)
+                                                .background(OrosiHairline)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -3202,9 +3324,10 @@ fun TransactionDetailAndEditBottomSheet(
                     },
                     placeholder = {
                         Text(
-                            text = "مثلاً: پفک، شارژ ایرانسل، نانوایی...",
+                            text = "مثلاً: ${smartBankTagExamples(transaction.totalAmountToman, isIncome = transaction.type == "INCOME")}...",
                             style = MaterialTheme.typography.labelSmall,
-                            maxLines = 1
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     },
                     trailingIcon = {

@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class BankSmsBroadcastReceiver : BroadcastReceiver() {
 
@@ -40,13 +41,16 @@ class BankSmsBroadcastReceiver : BroadcastReceiver() {
         val appContext = context.applicationContext
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
-                val dao = OrosiDatabase.getInstance(appContext).orosiDao()
-                val repository = OrosiFinanceRepository(dao, appContext)
-                repository.processIncomingBankSms(
-                    rawSms = fullBody,
-                    timestampMillis = smsTimestamp,
-                    senderAddress = senderAddress
-                )
+                // Guard against Android's 10-second BroadcastReceiver ANR window
+                withTimeoutOrNull(8_500L) {
+                    val dao = OrosiDatabase.getInstance(appContext).orosiDao()
+                    val repository = OrosiFinanceRepository(dao, appContext)
+                    repository.processIncomingBankSms(
+                        rawSms = fullBody,
+                        timestampMillis = smsTimestamp,
+                        senderAddress = senderAddress
+                    )
+                }
             } finally {
                 pendingResult.finish()
             }

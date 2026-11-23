@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -53,7 +54,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -90,6 +93,7 @@ import com.example.ui.theme.NishapurTurquoise
 import com.example.ui.theme.NishapurTurquoiseBright
 import com.example.ui.theme.NishapurTurquoiseDeep
 import com.example.ui.theme.NishapurTurquoiseSoft
+import com.example.ui.theme.OrosiDeepTealTint
 import com.example.ui.theme.OrosiHairline
 import com.example.ui.theme.OrosiOnSurfaceVariant
 import com.example.ui.theme.OrosiSurfaceContainer
@@ -110,7 +114,7 @@ private val DashCardShape20 = RoundedCornerShape(20.dp)
 private val DashCardShape18 = RoundedCornerShape(18.dp)
 private val DashPillShape12 = RoundedCornerShape(12.dp)
 private val DashPillShape50 = RoundedCornerShape(50)
-private val DashTankhahCardBg = Color(0xFF112936)
+private val DashTankhahCardBg = OrosiDeepTealTint
 private val DashDeleteOverlayBg = OrosiSurfaceHigh.copy(alpha = 0.96f)
 private val DashExpenseTagBg = RubyRose.copy(alpha = 0.22f)
 private val DashIncomeTagBg = NishapurTurquoiseDeep.copy(alpha = 0.72f)
@@ -247,7 +251,7 @@ fun DashboardScreen(
     // NEVER flash "۰ تومان" or "در حال بازخوانی پیامک‌های بانکی..." before Room emits its first snapshot.
     val isInitialSkeletonLoading = hasLoadedFromDb && isSyncingSms && bankAccounts.isEmpty() && visibleTransactions.isEmpty()
     val showHeroPlaceholderShimmer = !hasLoadedFromDb || isInitialSkeletonLoading
-    val shimmerBrush = if (showHeroPlaceholderShimmer) orosiShimmerBrush() else null
+    val shimmerOffset = if (showHeroPlaceholderShimmer) rememberOrosiShimmerOffset() else null
 
     LazyColumn(
         modifier = modifier
@@ -295,7 +299,7 @@ fun DashboardScreen(
                 onlyTankhahMode = settings.onlyTankhahMode,
                 isSyncingSms = hasLoadedFromDb && isSyncingSms,
                 showInitialShimmer = showHeroPlaceholderShimmer,
-                shimmerBrush = shimmerBrush,
+                shimmerOffset = shimmerOffset,
                 onToggleHideAmounts = onToggleHideAmounts,
                 onSetOnlyTankhahMode = onSetOnlyTankhahMode,
                 onClick = onHeroCardClick
@@ -323,6 +327,7 @@ fun DashboardScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(2.dp),
                         modifier = Modifier
+                            .minimumInteractiveComponentSize()
                             .clip(DashPillShape50)
                             .clickable(onClick = onOpenAccountsTab)
                             .padding(horizontal = 8.dp, vertical = 6.dp)
@@ -349,10 +354,10 @@ fun DashboardScreen(
                         .testTag("bank_accounts_carousel"),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    if (isInitialSkeletonLoading && shimmerBrush != null) {
+                    if (isInitialSkeletonLoading && shimmerOffset != null) {
                         items(2, key = { "account_shimmer_$it" }, contentType = { "account_shimmer" }) { idx ->
                             AccountCardSkeletonShimmer(
-                                shimmerBrush = shimmerBrush,
+                                shimmerOffset = shimmerOffset,
                                 modifier = Modifier.testTag("account_shimmer_card_$idx")
                             )
                         }
@@ -393,6 +398,7 @@ fun DashboardScreen(
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
+                        .minimumInteractiveComponentSize()
                         .background(DashHeaderVoiceBrush, DashPillShape50)
                         .border(1.dp, NishapurTurquoiseBright, DashPillShape50)
                         .clickable(onClick = onAddVoiceClick)
@@ -419,10 +425,10 @@ fun DashboardScreen(
         }
 
         // 4. Recent Transaction Cards (or Calm Shimmer Skeletons during initial inbox scan)
-        if (isInitialSkeletonLoading && shimmerBrush != null) {
+        if (isInitialSkeletonLoading && shimmerOffset != null) {
             items(4, key = { "home_tx_shimmer_$it" }, contentType = { "tx_shimmer" }) { idx ->
                 TransactionRowSkeletonShimmer(
-                    shimmerBrush = shimmerBrush,
+                    shimmerOffset = shimmerOffset,
                     modifier = Modifier.testTag("tx_shimmer_card_$idx")
                 )
             }
@@ -626,7 +632,7 @@ private fun JibemanFinancialStatusHeroCard(
     onlyTankhahMode: Boolean,
     isSyncingSms: Boolean = false,
     showInitialShimmer: Boolean = false,
-    shimmerBrush: Brush? = null,
+    shimmerOffset: State<Float>? = null,
     onToggleHideAmounts: () -> Unit,
     onSetOnlyTankhahMode: (Boolean) -> Unit,
     onClick: () -> Unit
@@ -787,13 +793,13 @@ private fun JibemanFinancialStatusHeroCard(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                if (showInitialShimmer && shimmerBrush != null) {
+                if (showInitialShimmer && shimmerOffset != null) {
                     Box(
                         modifier = Modifier
                             .width(196.dp)
                             .height(34.dp)
                             .clip(RoundedCornerShape(12.dp))
-                            .background(shimmerBrush)
+                            .orosiShimmerFill(shimmerOffset)
                             .testTag("hero_balance_shimmer")
                     )
                     Spacer(modifier = Modifier.height(6.dp))
@@ -931,13 +937,13 @@ private fun JibemanFinancialStatusHeroCard(
                             color = PersianLapisLight
                         )
                     }
-                    if (showInitialShimmer && shimmerBrush != null) {
+                    if (showInitialShimmer && shimmerOffset != null) {
                         Box(
                             modifier = Modifier
                                 .width(92.dp)
                                 .height(16.dp)
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(shimmerBrush)
+                                .orosiShimmerFill(shimmerOffset)
                         )
                     } else {
                         OrosiAmountText(
@@ -974,13 +980,13 @@ private fun JibemanFinancialStatusHeroCard(
                             color = PersianLapisLight
                         )
                     }
-                    if (showInitialShimmer && shimmerBrush != null) {
+                    if (showInitialShimmer && shimmerOffset != null) {
                         Box(
                             modifier = Modifier
                                 .width(72.dp)
                                 .height(16.dp)
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(shimmerBrush)
+                                .orosiShimmerFill(shimmerOffset)
                         )
                     } else {
                         OrosiAmountText(
@@ -998,10 +1004,16 @@ private fun JibemanFinancialStatusHeroCard(
     }
 }
 
+private val OrosiShimmerColors = listOf(
+    OrosiSurfaceContainer.copy(alpha = 0.85f),
+    PersianLapisLight.copy(alpha = 0.28f),
+    OrosiSurfaceContainer.copy(alpha = 0.85f)
+)
+
 @Composable
-internal fun orosiShimmerBrush(): Brush {
+internal fun rememberOrosiShimmerOffset(): State<Float> {
     val transition = rememberInfiniteTransition(label = "orosiShimmer")
-    val translateAnim by transition.animateFloat(
+    return transition.animateFloat(
         initialValue = 0f,
         targetValue = 900f,
         animationSpec = infiniteRepeatable(
@@ -1010,20 +1022,22 @@ internal fun orosiShimmerBrush(): Brush {
         ),
         label = "shimmerTranslate"
     )
-    return Brush.linearGradient(
-        colors = listOf(
-            OrosiSurfaceContainer.copy(alpha = 0.85f),
-            PersianLapisLight.copy(alpha = 0.28f),
-            OrosiSurfaceContainer.copy(alpha = 0.85f)
-        ),
-        start = Offset(translateAnim - 300f, 0f),
-        end = Offset(translateAnim, 200f)
+}
+
+internal fun Modifier.orosiShimmerFill(shimmerOffset: State<Float>): Modifier = drawBehind {
+    val translateAnim = shimmerOffset.value
+    drawRect(
+        brush = Brush.linearGradient(
+            colors = OrosiShimmerColors,
+            start = Offset(translateAnim - 300f, 0f),
+            end = Offset(translateAnim, 200f)
+        )
     )
 }
 
 @Composable
 private fun AccountCardSkeletonShimmer(
-    shimmerBrush: Brush,
+    shimmerOffset: State<Float>,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -1031,7 +1045,6 @@ private fun AccountCardSkeletonShimmer(
             .width(184.dp)
             .clip(RoundedCornerShape(20.dp))
             .background(OrosiSurfaceHigh)
-            .border(1.dp, OrosiHairline, RoundedCornerShape(20.dp))
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -1040,7 +1053,7 @@ private fun AccountCardSkeletonShimmer(
                 modifier = Modifier
                     .size(44.dp)
                     .clip(CircleShape)
-                    .background(shimmerBrush)
+                    .orosiShimmerFill(shimmerOffset)
             )
             Spacer(modifier = Modifier.width(10.dp))
             Box(
@@ -1048,7 +1061,7 @@ private fun AccountCardSkeletonShimmer(
                     .width(74.dp)
                     .height(14.dp)
                     .clip(RoundedCornerShape(7.dp))
-                    .background(shimmerBrush)
+                    .orosiShimmerFill(shimmerOffset)
             )
         }
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1057,14 +1070,14 @@ private fun AccountCardSkeletonShimmer(
                     .width(60.dp)
                     .height(10.dp)
                     .clip(RoundedCornerShape(5.dp))
-                    .background(shimmerBrush)
+                    .orosiShimmerFill(shimmerOffset)
             )
             Box(
                 modifier = Modifier
                     .width(116.dp)
                     .height(16.dp)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(shimmerBrush)
+                    .orosiShimmerFill(shimmerOffset)
             )
         }
     }
@@ -1072,7 +1085,7 @@ private fun AccountCardSkeletonShimmer(
 
 @Composable
 internal fun TransactionRowSkeletonShimmer(
-    shimmerBrush: Brush,
+    shimmerOffset: State<Float>,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -1080,7 +1093,6 @@ internal fun TransactionRowSkeletonShimmer(
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
             .background(OrosiSurfaceContainer)
-            .border(1.dp, OrosiHairline, RoundedCornerShape(20.dp))
             .padding(horizontal = 14.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1088,7 +1100,7 @@ internal fun TransactionRowSkeletonShimmer(
             modifier = Modifier
                 .size(44.dp)
                 .clip(CircleShape)
-                .background(shimmerBrush)
+                .orosiShimmerFill(shimmerOffset)
         )
         Spacer(modifier = Modifier.width(12.dp))
         Column(
@@ -1100,14 +1112,14 @@ internal fun TransactionRowSkeletonShimmer(
                     .fillMaxWidth(0.62f)
                     .height(14.dp)
                     .clip(RoundedCornerShape(7.dp))
-                    .background(shimmerBrush)
+                    .orosiShimmerFill(shimmerOffset)
             )
             Box(
                 modifier = Modifier
                     .fillMaxWidth(0.42f)
                     .height(11.dp)
                     .clip(RoundedCornerShape(6.dp))
-                    .background(shimmerBrush)
+                    .orosiShimmerFill(shimmerOffset)
             )
         }
         Spacer(modifier = Modifier.width(12.dp))
@@ -1116,7 +1128,7 @@ internal fun TransactionRowSkeletonShimmer(
                 .width(78.dp)
                 .height(16.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(shimmerBrush)
+                .orosiShimmerFill(shimmerOffset)
         )
     }
 }

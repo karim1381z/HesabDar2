@@ -54,6 +54,7 @@ import com.example.ui.theme.NishapurTurquoise
 import com.example.ui.theme.NishapurTurquoiseBright
 import com.example.ui.theme.NishapurTurquoiseDeep
 import com.example.ui.theme.NishapurTurquoiseSoft
+import com.example.ui.theme.OrosiDeepTealTint
 import com.example.ui.theme.OrosiOnSurfaceVariant
 import com.example.ui.theme.OrosiSurfaceContainer
 import com.example.ui.theme.OrosiSurfaceHigh
@@ -70,7 +71,7 @@ private val AccHeroCardBg = NishapurTurquoiseDeep.copy(alpha = 0.52f)
 private val AccHeroIconBg = NishapurTurquoiseBright.copy(alpha = 0.20f)
 private val AccSavingsCardBg = PersianLapis.copy(alpha = 0.55f)
 private val AccSavingsIconBg = SaffronGoldBright.copy(alpha = 0.18f)
-private val AccTankhahRowBg = Color(0xFF112936)
+private val AccTankhahRowBg = OrosiDeepTealTint
 private val AccUnitTurquoise = NishapurTurquoiseSoft.copy(alpha = 0.80f)
 private val AccUnitGold = SaffronGoldLight.copy(alpha = 0.80f)
 

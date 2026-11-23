@@ -30,7 +30,7 @@ data class RegressionSuiteReport(
  */
 object OrosiRegressionSuite {
 
-    const val EXPECTED_TOTAL_CASES = 84
+    const val EXPECTED_TOTAL_CASES = 92
 
     fun runFullRegressionAndStressSuite(): RegressionSuiteReport {
         val suiteStartNanos = System.nanoTime()
@@ -1666,6 +1666,190 @@ object OrosiRegressionSuite {
                 c2.totalAmountToman == 1_000_000L &&
                 c3.totalAmountToman == 1_000L
             ok to "c1=${c1.totalAmountToman} • c2=${c2.totalAmountToman} • c3=${c3.totalAmountToman}"
+        }
+
+        // 85. Video v2.9: STT "۹ صد و خورده‌ای از با سلام دریافت کردم" -> 900,000 + "باسلام" protected from greeting stripper
+        recordTest(
+            category = "موتور صوتی و اصلاح STT (v2.9)",
+            title = "تبدیل «۹ صد و خورده‌ای از با سلام دریافت کردم» به ۹۰۰,۰۰۰ تقریبی با عنوان «باسلام»",
+            inputSummary = "من ۹ صد و خورده‌ای از با سلام دریافت کردم",
+            expectedSummary = "باسلام • ۹۰۰,۰۰۰ (واریز تقریبی)"
+        ) {
+            val parsed = PersianVoiceSlangParserEngine.parseVoiceCommand(
+                "من ۹ صد و خورده‌ای از با سلام دریافت کردم"
+            )
+            val ok = parsed.totalAmountToman == 900_000L &&
+                parsed.isIncome &&
+                parsed.isApproximateAmount &&
+                parsed.purposeCategory == "باسلام" &&
+                parsed.commitmentKind == null
+            ok to "${parsed.purposeCategory} • ${parsed.totalAmountToman} (inc=${parsed.isIncome}, approx=${parsed.isApproximateAmount})"
+        }
+
+        // 86. Video v2.9: "چند روز پیش یک و خورده‌ای از با سلام اومد به حسابم" -> title "باسلام" (not "یک") + auto-links +1,161,741
+        recordTest(
+            category = "تطبیق تقریبی «یک و خورده‌ای» (v2.9)",
+            title = "حذف عدد «یک» از عنوان و اتصال خودکار «یک و خورده‌ای از با سلام» به واریز ۱,۱۶۱,۷۴۱ بلوبانک",
+            inputSummary = "چند روز پیش یک و خورده‌ای از با سلام اومد به حسابم + بلو +۱,۱۶۱,۷۴۱ (۳ روز قبل)",
+            expectedSummary = "عنوان=باسلام • مبلغ پایه ۱,۰۰۰,۰۰۰ • اتصال خودکار به پیامک #۹۹۱"
+        ) {
+            val parsed = PersianVoiceSlangParserEngine.parseVoiceCommand(
+                "چند روز پیش یک و خورده‌ای از با سلام اومد به حسابم"
+            )
+            val nowTs = JalaliCalendarUtils.jalaliDayStartMillis(1405, 9, 2) + 6L * 3_600_000L
+            val smsTs = nowTs - 70L * 3_600_000L
+            val smsJ = JalaliCalendarUtils.fromTimestamp(smsTs)
+            val match = OrosiVoiceSmsMatcher.matchBatch(
+                items = listOf(parsed),
+                untaggedBankSms = listOf(
+                    UntaggedSmsCandidate(991L, "بلو", 1_161_741L, true, smsTs, smsJ.dateWithYear, smsJ.timeStr, "کارت بلو")
+                ),
+                nowMillis = nowTs
+            ).first()
+            val ok = parsed.totalAmountToman == 1_000_000L &&
+                parsed.purposeCategory == "باسلام" &&
+                parsed.isIncome &&
+                parsed.isApproximateAmount &&
+                parsed.isVagueRecentPast &&
+                match.isApproximateAutoMatch &&
+                match.matchedCandidate?.id == 991L
+            ok to "title=${parsed.purposeCategory} • base=${parsed.totalAmountToman} • matched=${match.matchedCandidate?.id}"
+        }
+
+        // 87. Video v2.9: "من ۲۰۰ و خورده‌ای دریافت کردم از باسلام" -> Pass 2B 7-day unique approx auto-links 43h-old +278,694
+        recordTest(
+            category = "اتصال تقریبی ۷ روزه یکتا (v2.9)",
+            title = "پوشش کامل بازه ۲۰۰ تا ۲۹۹ هزار و اتصال خودکار «۲۰۰ و خورده‌ای از باسلام» به پیامک ۴۳ ساعته +۲۷۸,۶۹۴ (Pass 2B)",
+            inputSummary = "من ۲۰۰ و خورده‌ای دریافت کردم از باسلام + پیامک یکتای بلو +۲۷۸,۶۹۴ (۴۳ ساعت قبل)",
+            expectedSummary = "باسلام • ۲۰۰,۰۰۰ تقریبی • اتصال خودکار (isApproximateAutoMatch=true) به #۹۹۲"
+        ) {
+            val parsed = PersianVoiceSlangParserEngine.parseVoiceCommand(
+                "من ۲۰۰ و خورده‌ای دریافت کردم از باسلام"
+            )
+            val nowTs = JalaliCalendarUtils.jalaliDayStartMillis(1405, 9, 2) + 5L * 3_600_000L + 36L * 60_000L
+            val sms43hTs = nowTs - 43L * 3_600_000L
+            val smsJ = JalaliCalendarUtils.fromTimestamp(sms43hTs)
+            val match = OrosiVoiceSmsMatcher.matchBatch(
+                items = listOf(parsed),
+                untaggedBankSms = listOf(
+                    UntaggedSmsCandidate(992L, "بلو", 278_694L, true, sms43hTs, smsJ.dateWithYear, smsJ.timeStr, "کارت بلو")
+                ),
+                nowMillis = nowTs
+            ).first()
+            val ok = parsed.totalAmountToman == 200_000L &&
+                parsed.purposeCategory == "باسلام" &&
+                parsed.isIncome &&
+                parsed.isApproximateAmount &&
+                match.isApproximateAutoMatch &&
+                match.matchedCandidate?.id == 992L
+            ok to "title=${parsed.purposeCategory} • matched=${match.matchedCandidate?.id} (approx=${match.isApproximateAutoMatch})"
+        }
+
+        // 88. Pass 2B ambiguity guard: 2+ approximate SMS in 2..7 days MUST NOT guess; surface closest suggestion
+        recordTest(
+            category = "محافظت از ابهام تقریبی ۷ روزه (v2.9)",
+            title = "عدم حدس خودکار Pass 2B هنگام وجود ۲ پیامک تقریبی در ۲ تا ۷ روز قبل + نمایش دکمه پیشنهاد",
+            inputSummary = "من ۲۰۰ و خورده‌ای دریافت کردم از باسلام + دو واریز ۲۴۵,۰۰۰ و ۲۷۸,۶۹۴ در ۳ و ۵ روز قبل",
+            expectedSummary = "matchedCandidate=null • suggestedCandidate!=null"
+        ) {
+            val parsed = PersianVoiceSlangParserEngine.parseVoiceCommand(
+                "من ۲۰۰ و خورده‌ای دریافت کردم از باسلام"
+            )
+            val nowTs = JalaliCalendarUtils.jalaliDayStartMillis(1405, 9, 2) + 12L * 3_600_000L
+            val ts1 = nowTs - 60L * 3_600_000L
+            val ts2 = nowTs - 110L * 3_600_000L
+            val j1 = JalaliCalendarUtils.fromTimestamp(ts1)
+            val j2 = JalaliCalendarUtils.fromTimestamp(ts2)
+            val match = OrosiVoiceSmsMatcher.matchBatch(
+                items = listOf(parsed),
+                untaggedBankSms = listOf(
+                    UntaggedSmsCandidate(993L, "بلو", 245_000L, true, ts1, j1.dateWithYear, j1.timeStr, "کارت بلو"),
+                    UntaggedSmsCandidate(994L, "سپه", 278_694L, true, ts2, j2.dateWithYear, j2.timeStr, "کارت سپه")
+                ),
+                nowMillis = nowTs
+            ).first()
+            val ok = match.matchedCandidate == null &&
+                !match.isApproximateAutoMatch &&
+                match.suggestedCandidate?.id == 993L
+            ok to "matched=${match.matchedCandidate?.id} • suggested=${match.suggestedCandidate?.id}"
+        }
+
+        // 89. Past-cycle commitment scoping in Balance Sheet (isCommitmentDueInCycle)
+        recordTest(
+            category = "تفکیک تعهدات ماه‌های گذشته (v2.9)",
+            title = "عدم نشت قسط آذر و دی به ترازنامه ماه گذشته (آبان) و نمایش فقط تعهدات همان دوره",
+            inputSummary = "تاریخ مبنا ۲ آذر ۱۴۰۵ • cycleOffset=-1 (آبان) • قسط ۱۵ آبان، ۲۰ آذر و ۱ دی",
+            expectedSummary = "آبان=true • آذر=false • دی=false"
+        ) {
+            val azar2Ts = JalaliCalendarUtils.jalaliDayStartMillis(1405, 9, 2) + 12L * 3_600_000L
+            val inAban = OrosiCashflowAnalyzer.isCommitmentDueInCycle("۱۵ آبان ۱۴۰۵", 1, azar2Ts, -1)
+            val azarInAban = OrosiCashflowAnalyzer.isCommitmentDueInCycle("۲۰ آذر ۱۴۰۵", 1, azar2Ts, -1)
+            val deyInAban = OrosiCashflowAnalyzer.isCommitmentDueInCycle("۱ دی ۱۴۰۵", 1, azar2Ts, -1)
+            val ok = inAban && !azarInAban && !deyInAban
+            ok to "aban=$inAban • azar=$azarInAban • dey=$deyInAban"
+        }
+
+        // 90. Comprehensive Monthly Report analyzer with self-transfer exclusion, savings rate & tagging coverage
+        recordTest(
+            category = "گزارش جامع ماه‌به‌ماه (v2.9)",
+            title = "محاسبه دقیق گزارش ماهانه با کسر انتقال خودی، نرخ پس‌انداز، میانگین روزانه و درصد برچسب‌گذاری",
+            inputSummary = "آبان ۱۴۰۵: ۱۰M واریز + ۴M خرج (۳M تگ‌دار، ۱M بی‌بابت) + ۲M انتقال خودی بلو↔سپه",
+            expectedSummary = "ورودی=۱۰M • خرج=۴M • خالص=۶M • پس‌انداز=۶۰٪ • انتقال خودی=۱"
+        ) {
+            val aban15Ts = JalaliCalendarUtils.jalaliDayStartMillis(1405, 8, 15) + 10L * 3_600_000L
+            val rows = listOf(
+                MonthlyReportTxSnapshot(1L, "INCOME", 10_000_000L, 10_000_000L, "بلو", "حقوق", false, aban15Ts),
+                MonthlyReportTxSnapshot(2L, "EXPENSE", 3_000_000L, 3_000_000L, "بلو", "اجاره", false, aban15Ts + 3_600_000L),
+                MonthlyReportTxSnapshot(3L, "EXPENSE", 1_000_000L, 1_000_000L, "سپه", "خرید کارتی (سپه)", true, aban15Ts + 7_200_000L),
+                MonthlyReportTxSnapshot(4L, "EXPENSE", 2_000_000L, 2_000_000L, "بلو", "انتقال", false, aban15Ts + 10_800_000L),
+                MonthlyReportTxSnapshot(5L, "INCOME", 2_000_000L, 2_000_000L, "سپه", "واریز", false, aban15Ts + 10_860_000L)
+            )
+            val rep = OrosiCashflowAnalyzer.analyzeMonthlyReport(rows, 140508, aban15Ts + 10L * 86_400_000L)
+            val ok = rep.totalIncomeToman == 10_000_000L &&
+                rep.totalExpenseToman == 4_000_000L &&
+                rep.netBalanceToman == 6_000_000L &&
+                rep.savingsRatePercent == 60 &&
+                rep.excludedSelfTransferPairs == 1 &&
+                rep.taggedExpenseCount == 1 &&
+                rep.untaggedExpenseCount == 1
+            ok to "inc=${rep.totalIncomeToman} • exp=${rep.totalExpenseToman} • net=${rep.netBalanceToman} • save=${rep.savingsRatePercent}% • self=${rep.excludedSelfTransferPairs}"
+        }
+
+        // 91. 6-month trend builder returns 6 chronological months ending at anchor with self-transfer exclusion
+        recordTest(
+            category = "نمودار روند ۶ ماهه (v2.9)",
+            title = "ساخت روند ۶ ماه متوالی شمسی (تیر تا آذر ۱۴۰۵) با ترتیب زمانی و کسر انتقال خودی",
+            inputSummary = "anchor=140509 • ۶ ماه متوالی با تراکنش در آبان و آذر",
+            expectedSummary = "۶ نقطه زمانی: تیر..آذر ۱۴۰۵ با جمع صحیح آبان و آذر"
+        ) {
+            val aban10 = JalaliCalendarUtils.jalaliDayStartMillis(1405, 8, 10) + 10L * 3_600_000L
+            val azar2 = JalaliCalendarUtils.jalaliDayStartMillis(1405, 9, 2) + 10L * 3_600_000L
+            val rows = listOf(
+                MonthlyReportTxSnapshot(10L, "INCOME", 8_000_000L, 8_000_000L, "بلو", "واریز", false, aban10),
+                MonthlyReportTxSnapshot(11L, "EXPENSE", 2_500_000L, 2_500_000L, "بلو", "خرید", false, azar2)
+            )
+            val trend = OrosiCashflowAnalyzer.buildLastMonthsTrend(rows, 140509, 6)
+            val ok = trend.size == 6 &&
+                trend.first().yearMonthKey == 140504 &&
+                trend.last().yearMonthKey == 140509 &&
+                trend[4].incomeToman == 8_000_000L &&
+                trend[5].expenseToman == 2_500_000L
+            ok to "size=${trend.size} • first=${trend.first().yearMonthKey} • last=${trend.last().yearMonthKey}"
+        }
+
+        // 92. PaydayCashflowSummary.cycleYearMonthKeys resolves both single-month and cross-month keys for lazy sync
+        recordTest(
+            category = "همگام‌سازی تنبل ترازنامه (v2.9)",
+            title = "تشخیص دقیق کلید ماه‌های شمسی درگیر در هر ماه حقوقی برای همگام‌سازی خودکار پیامک‌ها",
+            inputSummary = "شروع ماه حقوقی روز ۱ (آبان) و روز ۱۵ (مهر-آبان)",
+            expectedSummary = "روز ۱ -> [140508] • روز ۱۵ -> [140507, 140508]"
+        ) {
+            val azar2Ts = JalaliCalendarUtils.jalaliDayStartMillis(1405, 9, 2) + 12L * 3_600_000L
+            val singleMonth = OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle(emptyList(), 1, 0L, azar2Ts, -1)
+            val crossMonth = OrosiCashflowAnalyzer.analyzeCurrentPaydayCycle(emptyList(), 15, 0L, azar2Ts, -1)
+            val ok = singleMonth.cycleYearMonthKeys == listOf(140508) &&
+                crossMonth.cycleYearMonthKeys == listOf(140507, 140508)
+            ok to "single=${singleMonth.cycleYearMonthKeys} • cross=${crossMonth.cycleYearMonthKeys}"
         }
 
         val totalMs = ((System.nanoTime() - suiteStartNanos) / 1_000_000L).coerceAtLeast(1L)

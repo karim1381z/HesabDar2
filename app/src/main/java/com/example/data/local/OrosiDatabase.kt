@@ -6,18 +6,25 @@ import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
 import androidx.room.Ignore
+import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.Transaction
 import androidx.room.Update
 import com.example.domain.JalaliCalendarUtils
 import kotlinx.coroutines.flow.Flow
 
 @Immutable
-@Entity(tableName = "transactions")
+@Entity(
+    tableName = "transactions",
+    indices = [
+        Index(value = ["timestamp", "id"], name = "idx_transactions_timestamp_id")
+    ]
+)
 data class TransactionEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val title: String,
@@ -129,7 +136,12 @@ data class BankAccountEntity(
 )
 
 @Immutable
-@Entity(tableName = "commitments")
+@Entity(
+    tableName = "commitments",
+    indices = [
+        Index(value = ["isSettled", "timestamp", "id"], name = "idx_commitments_settled_timestamp_id")
+    ]
+)
 data class CommitmentEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val category: String, // "SAYYAD_ISSUED", "SAYYAD_RECEIVED", "LOAN_INSTALLMENT", "DONG"
@@ -150,7 +162,7 @@ data class AppSettingsEntity(
     val dailySafeBudgetToman: Long = 0L,
     val monthlyBalanceToman: Long = 0L,
     val paydayStartDay: Int = 1,
-    val paydayCycleLabel: String = "۱ آبان تا ۳۰ آبان ۱۴۰۵",
+    val paydayCycleLabel: String = "",
     val autoDetectSalary: Boolean = true,
     val goldPrice18kToman: Long = 4_360_000L,
     val goldReserveToman: Long = 0L,
@@ -241,6 +253,43 @@ interface OrosiDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun saveSettings(settings: AppSettingsEntity)
+
+    @Transaction
+    suspend fun purgeForRealSmsRescanAtomic(demoCommitmentIds: List<Long>) {
+        clearAllTransactions()
+        clearAllBankAccounts()
+        demoCommitmentIds.forEach { deleteCommitmentById(it) }
+    }
+
+    @Transaction
+    suspend fun restoreSnapshotAtomic(
+        settings: AppSettingsEntity?,
+        bankAccounts: List<BankAccountEntity>?,
+        transactions: List<TransactionEntity>?,
+        commitments: List<CommitmentEntity>?
+    ) {
+        if (settings != null) {
+            saveSettings(settings)
+        }
+        if (bankAccounts != null) {
+            clearAllBankAccounts()
+            if (bankAccounts.isNotEmpty()) {
+                upsertBankAccounts(bankAccounts)
+            }
+        }
+        if (transactions != null) {
+            clearAllTransactions()
+            if (transactions.isNotEmpty()) {
+                insertTransactions(transactions)
+            }
+        }
+        if (commitments != null) {
+            clearAllCommitments()
+            if (commitments.isNotEmpty()) {
+                insertCommitments(commitments)
+            }
+        }
+    }
 }
 
 @Database(
@@ -250,8 +299,8 @@ interface OrosiDao {
         CommitmentEntity::class,
         AppSettingsEntity::class
     ],
-    version = 7,
-    exportSchema = false
+    version = 8,
+    exportSchema = true
 )
 abstract class OrosiDatabase : RoomDatabase() {
     abstract fun orosiDao(): OrosiDao
@@ -260,10 +309,21 @@ abstract class OrosiDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: OrosiDatabase? = null
 
-        private val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
+        internal val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL(
                     "ALTER TABLE app_settings ADD COLUMN selectedFontFamily TEXT NOT NULL DEFAULT 'IRANSANSX'"
+                )
+            }
+        }
+
+        internal val MIGRATION_7_8 = object : androidx.room.migration.Migration(7, 8) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS idx_transactions_timestamp_id ON transactions(timestamp, id)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS idx_commitments_settled_timestamp_id ON commitments(isSettled, timestamp, id)"
                 )
             }
         }
@@ -275,8 +335,7 @@ abstract class OrosiDatabase : RoomDatabase() {
                     OrosiDatabase::class.java,
                     "orosi_finance_v15_jibeman.db"
                 )
-                    .addMigrations(MIGRATION_6_7)
-                    .fallbackToDestructiveMigration()
+                    .addMigrations(MIGRATION_6_7, MIGRATION_7_8)
                     .build()
                 INSTANCE = instance
                 instance

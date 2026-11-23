@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -13,34 +14,50 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.CallReceived
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.outlined.ArrowDownward
+import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -53,26 +70,40 @@ import androidx.compose.ui.unit.sp
 import com.example.data.local.CommitmentEntity
 import com.example.data.local.TransactionEntity
 import com.example.domain.JalaliCalendarUtils
+import com.example.domain.MonthlyReportBarPoint
+import com.example.domain.MonthlyReportTxSnapshot
+import com.example.domain.OrosiCashflowAnalyzer
 import com.example.domain.PersianNumberUtils
 import com.example.ui.CommitmentTab
+import com.example.ui.components.OrosiAmountText
 import com.example.ui.theme.AlabasterSilk
 import com.example.ui.theme.NishapurTurquoise
 import com.example.ui.theme.NishapurTurquoiseBright
 import com.example.ui.theme.NishapurTurquoiseDeep
 import com.example.ui.theme.NishapurTurquoiseSoft
+import com.example.ui.theme.OrosiBalanceExpenseCardBg
+import com.example.ui.theme.OrosiBalanceIncomeCardBg
 import com.example.ui.theme.OrosiHairline
 import com.example.ui.theme.OrosiOnSurfaceVariant
 import com.example.ui.theme.OrosiSurfaceContainer
 import com.example.ui.theme.OrosiSurfaceHigh
+import com.example.ui.theme.OrosiSurfaceLow
 import com.example.ui.theme.PersianLapis
 import com.example.ui.theme.PersianLapisLight
 import com.example.ui.theme.RoyalAmethyst
 import com.example.ui.theme.RoyalAmethystContainer
 import com.example.ui.theme.RoyalAmethystDeep
 import com.example.ui.theme.RoyalAmethystSoft
+import com.example.ui.theme.RubyRose
 import com.example.ui.theme.RubyRoseSoft
+import com.example.ui.theme.SaffronGold
 import com.example.ui.theme.SaffronGoldBright
 import com.example.ui.theme.SaffronGoldLight
+
+private val CommCardShape22 = RoundedCornerShape(22.dp)
+private val CommCardShape20 = RoundedCornerShape(20.dp)
+private val CommCardShape16 = RoundedCornerShape(16.dp)
+private val CommPillShape50 = RoundedCornerShape(50)
 
 @Composable
 fun CommitmentsScreen(
@@ -81,6 +112,8 @@ fun CommitmentsScreen(
     commitments: List<CommitmentEntity>,
     transactions: List<TransactionEntity>,
     hideAmounts: Boolean,
+    isSyncingReportMonths: Boolean = false,
+    onEnsureMonthsSynced: (List<Int>) -> Unit = {},
     onCommitmentClick: (CommitmentEntity) -> Unit,
     onOpenAddCommitmentModal: () -> Unit,
     onBackToDashboard: () -> Unit,
@@ -110,9 +143,8 @@ fun CommitmentsScreen(
         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 1. Clean 2x2 Jibeman Tools Grid Selector without truncation:
-        // چک صیادی | وام و قسط | بدهی و طلب (دُنگ) | گزارش دخل و خرج
-        item {
+        // 1. Clean 2x2 Tools Grid Selector without truncation
+        item(key = "tools_grid_selector", contentType = "tools_grid") {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -169,22 +201,23 @@ fun CommitmentsScreen(
         }
 
         if (selectedTab == CommitmentTab.REPORTS) {
-            item {
+            item(key = "reports_section", contentType = "reports") {
                 IncomeExpenseReportSection(
                     transactions = transactions,
                     commitments = commitments,
-                    hideAmounts = hideAmounts
+                    hideAmounts = hideAmounts,
+                    isSyncingReportMonths = isSyncingReportMonths,
+                    onEnsureMonthsSynced = onEnsureMonthsSynced
                 )
             }
         } else {
-            // Reassuring Banner
-            item {
+            // Reassuring Banner — borderless tonal card matching v2.8/v2.9 design grammar & accurate cycle scope
+            item(key = "reassuring_banner", contentType = "info_banner") {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(NishapurTurquoiseDeep.copy(alpha = 0.65f))
-                        .border(1.dp, NishapurTurquoiseBright.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
+                        .clip(CommCardShape20)
+                        .background(NishapurTurquoiseDeep.copy(alpha = 0.56f))
                         .padding(horizontal = 18.dp, vertical = 14.dp)
                         .testTag("reassuring_commitments_banner"),
                     verticalAlignment = Alignment.CenterVertically
@@ -197,21 +230,23 @@ fun CommitmentsScreen(
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "مبلغ تعهدات فعال این بخش به‌صورت خودکار از موجودی آزاد کسر شده است.",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        text = "تعهدات سررسید این ماه حقوقی در محاسبه موجودی آزاد لحاظ می‌شوند؛ تعهدات ماه‌های آینده جداگانه نگهداری می‌شوند.",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            lineHeight = 20.sp
+                        ),
                         color = AlabasterSilk
                     )
                 }
             }
 
             if (filteredCommitments.isEmpty()) {
-                item {
+                item(key = "empty_commitments_${selectedTab.name}", contentType = "empty_card") {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(20.dp))
+                            .clip(CommCardShape20)
                             .background(OrosiSurfaceContainer)
-                            .border(1.dp, OrosiHairline, RoundedCornerShape(20.dp))
                             .padding(24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
@@ -263,7 +298,7 @@ fun CommitmentsScreen(
             }
 
             // Action Button to add new Commitment
-            item {
+            item(key = "add_commitment_cta", contentType = "cta_button") {
                 Spacer(modifier = Modifier.height(4.dp))
                 val buttonLabel = when (selectedTab) {
                     CommitmentTab.SAYYAD -> "+ ثبت چک صیادی جدید"
@@ -281,7 +316,7 @@ fun CommitmentsScreen(
                     contentPadding = PaddingValues(vertical = 16.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .border(1.dp, RoyalAmethystSoft.copy(alpha = 0.55f), RoundedCornerShape(18.dp))
+                        .heightIn(min = 52.dp)
                         .testTag("add_new_cheque_button")
                 ) {
                     Text(
@@ -307,15 +342,18 @@ private fun ToolGridCard(
 ) {
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(if (isSelected) PersianLapis else OrosiSurfaceHigh)
-            .border(
-                width = if (isSelected) 1.5.dp else 1.dp,
-                color = if (isSelected) accentColor else OrosiHairline,
-                shape = RoundedCornerShape(16.dp)
+            .heightIn(min = 50.dp)
+            .clip(CommCardShape16)
+            .background(if (isSelected) PersianLapis else OrosiSurfaceContainer)
+            .then(
+                if (isSelected) {
+                    Modifier.border(1.4.dp, accentColor.copy(alpha = 0.85f), CommCardShape16)
+                } else {
+                    Modifier
+                }
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 14.dp)
+            .padding(horizontal = 12.dp, vertical = 13.dp)
             .testTag(testTag),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -339,54 +377,81 @@ private fun ToolGridCard(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun IncomeExpenseReportSection(
     transactions: List<TransactionEntity>,
     commitments: List<CommitmentEntity>,
-    hideAmounts: Boolean
+    hideAmounts: Boolean,
+    isSyncingReportMonths: Boolean,
+    onEnsureMonthsSynced: (List<Int>) -> Unit
 ) {
-    // Default to "این ماه (آبان ۱۴۰۵)" with a clean toggle for "کل زمان‌ها"
-    var isCurrentMonthOnly by remember { mutableStateOf(true) }
     val currentJalali = remember { JalaliCalendarUtils.fromTimestamp(System.currentTimeMillis()) }
+    val currentYearMonthKey = currentJalali.yearMonthKey
 
-    val filteredTransactions = remember(transactions, isCurrentMonthOnly, currentJalali) {
-        val valid = transactions.filter { it.totalAmountToman > 0L && it.shortBankName != "بانک" }
-        if (isCurrentMonthOnly) {
-            valid.filter { tx ->
-                val j = JalaliCalendarUtils.fromTimestamp(tx.timestamp)
-                j.year == currentJalali.year && j.month == currentJalali.month
-            }
+    // Monthly mode ("ماه‌به‌ماه") vs All-Time ("کل زمان‌ها")
+    var isMonthlyMode by remember { mutableStateOf(true) }
+    var selectedYearMonthKey by remember { mutableIntStateOf(currentYearMonthKey) }
+    var showMonthPickerSheet by remember { mutableStateOf(false) }
+
+    val canGoNextMonth = selectedYearMonthKey < currentYearMonthKey
+
+    // Automatically lazy-sync selected month + previous month + 6-month trend window from SMS inbox
+    val monthsNeededForView = remember(selectedYearMonthKey, isMonthlyMode) {
+        if (isMonthlyMode) {
+            (-5..0).map { offset ->
+                JalaliCalendarUtils.shiftJalaliYearMonth(selectedYearMonthKey, offset)
+            }.distinct()
         } else {
-            valid
+            (-5..0).map { offset ->
+                JalaliCalendarUtils.shiftJalaliYearMonth(currentYearMonthKey, offset)
+            }.distinct()
         }
     }
 
-    val totalIncome = filteredTransactions.filter { it.type == "INCOME" }.sumOf { it.userShareToman }
-    val totalExpense = filteredTransactions.filter { it.type == "EXPENSE" }.sumOf { it.userShareToman }
-    val activeCommitments = commitments.filter { !it.isSettled }.sumOf { it.amountToman }
+    LaunchedEffect(monthsNeededForView) {
+        onEnsureMonthsSynced(monthsNeededForView)
+    }
 
-    // Exclude "نقدی / دستی" and "بانک" test items from the bank breakdown chart
-    val expensesByBank = filteredTransactions
-        .filter {
-            it.type == "EXPENSE" &&
-                it.shortBankName != "نقدی / دستی" &&
-                it.shortBankName != "بانک" &&
-                it.shortBankName != "تراکنش صوتی"
+    val txSnapshots = remember(transactions) {
+        transactions.map { tx ->
+            MonthlyReportTxSnapshot(
+                id = tx.id,
+                type = tx.type,
+                totalAmountToman = tx.totalAmountToman,
+                userShareToman = tx.userShareToman,
+                bankName = tx.shortBankName,
+                displayTitle = tx.displayTitle,
+                isUntagged = tx.isUntagged,
+                timestamp = tx.timestamp
+            )
         }
-        .groupBy { it.shortBankName }
-        .mapValues { (_, list) -> list.sumOf { it.userShareToman } }
-        .filterValues { it > 0L }
-        .entries
-        .sortedByDescending { it.value }
+    }
 
-    val expensesByPurpose = filteredTransactions
-        .filter { it.type == "EXPENSE" }
-        .groupBy { it.displayTitle }
-        .mapValues { (_, list) -> list.sumOf { it.userShareToman } }
-        .filterValues { it > 0L }
-        .entries
-        .sortedByDescending { it.value }
-        .take(8)
+    val report = remember(txSnapshots, isMonthlyMode, selectedYearMonthKey) {
+        OrosiCashflowAnalyzer.analyzeMonthlyReport(
+            transactions = txSnapshots,
+            selectedYearMonthKey = if (isMonthlyMode) selectedYearMonthKey else null
+        )
+    }
+
+    val trendPoints = remember(txSnapshots, selectedYearMonthKey) {
+        OrosiCashflowAnalyzer.buildLastMonthsTrend(
+            transactions = txSnapshots,
+            anchorYearMonthKey = selectedYearMonthKey,
+            monthCount = 6
+        )
+    }
+
+    val activeCommitments = remember(commitments) {
+        commitments.filter { !it.isSettled }.sumOf { it.amountToman }
+    }
+
+    val selectedMonthLabel = remember(selectedYearMonthKey) {
+        val y = selectedYearMonthKey / 100
+        val m = (selectedYearMonthKey % 100).coerceIn(1, 12)
+        "${JalaliCalendarUtils.jalaliMonthName(m)} ${PersianNumberUtils.toPersianDigits(y.toString())}"
+    }
 
     Column(
         modifier = Modifier
@@ -394,13 +459,12 @@ private fun IncomeExpenseReportSection(
             .testTag("reports_section"),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Time Range Toggle: "این ماه (آبان ۱۴۰۵)" vs "کل زمان‌ها"
+        // 1. Mode Switcher: "ماه‌به‌ماه" vs "کل زمان‌ها"
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
+                .clip(CommCardShape16)
                 .background(OrosiSurfaceContainer)
-                .border(1.dp, OrosiHairline, RoundedCornerShape(16.dp))
                 .padding(4.dp)
                 .testTag("reports_time_range_toggle"),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -408,19 +472,20 @@ private fun IncomeExpenseReportSection(
             Box(
                 modifier = Modifier
                     .weight(1f)
+                    .heightIn(min = 44.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(if (isCurrentMonthOnly) NishapurTurquoise else Color.Transparent)
-                    .clickable { isCurrentMonthOnly = true }
+                    .background(if (isMonthlyMode) NishapurTurquoise else Color.Transparent)
+                    .clickable { isMonthlyMode = true }
                     .padding(vertical = 10.dp)
                     .testTag("report_toggle_this_month"),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "این ماه (${currentJalali.monthYearLabel})",
+                    text = "گزارش ماه‌به‌ماه",
                     style = MaterialTheme.typography.labelLarge.copy(
-                        fontWeight = if (isCurrentMonthOnly) FontWeight.Bold else FontWeight.Medium
+                        fontWeight = if (isMonthlyMode) FontWeight.Bold else FontWeight.Medium
                     ),
-                    color = if (isCurrentMonthOnly) AlabasterSilk else OrosiOnSurfaceVariant,
+                    color = if (isMonthlyMode) AlabasterSilk else OrosiOnSurfaceVariant,
                     maxLines = 1,
                     softWrap = false
                 )
@@ -429,9 +494,10 @@ private fun IncomeExpenseReportSection(
             Box(
                 modifier = Modifier
                     .weight(1f)
+                    .heightIn(min = 44.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(if (!isCurrentMonthOnly) NishapurTurquoise else Color.Transparent)
-                    .clickable { isCurrentMonthOnly = false }
+                    .background(if (!isMonthlyMode) NishapurTurquoise else Color.Transparent)
+                    .clickable { isMonthlyMode = false }
                     .padding(vertical = 10.dp)
                     .testTag("report_toggle_all_time"),
                 contentAlignment = Alignment.Center
@@ -439,111 +505,530 @@ private fun IncomeExpenseReportSection(
                 Text(
                     text = "کل زمان‌ها",
                     style = MaterialTheme.typography.labelLarge.copy(
-                        fontWeight = if (!isCurrentMonthOnly) FontWeight.Bold else FontWeight.Medium
+                        fontWeight = if (!isMonthlyMode) FontWeight.Bold else FontWeight.Medium
                     ),
-                    color = if (!isCurrentMonthOnly) AlabasterSilk else OrosiOnSurfaceVariant,
+                    color = if (!isMonthlyMode) AlabasterSilk else OrosiOnSurfaceVariant,
                     maxLines = 1,
                     softWrap = false
                 )
             }
         }
 
-        // Summary Card
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(22.dp))
-                .background(OrosiSurfaceHigh)
-                .border(1.dp, OrosiHairline, RoundedCornerShape(22.dp))
-                .padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Text(
-                text = if (isCurrentMonthOnly) {
-                    "خلاصه گزارش دخل و خرج (${currentJalali.monthYearLabel})"
-                } else {
-                    "خلاصه گزارش دخل و خرج (کل زمان‌ها)"
-                },
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
-                color = AlabasterSilk
-            )
-
-            ReportStatRow(
-                label = "کل دریافتی‌ها (واریز):",
-                value = PersianNumberUtils.formatToman(totalIncome, showUnit = true, hideAmount = hideAmounts),
-                color = NishapurTurquoiseSoft
-            )
-            ReportStatRow(
-                label = "کل پرداختی‌ها (برداشت):",
-                value = PersianNumberUtils.formatToman(totalExpense, showUnit = true, hideAmount = hideAmounts),
-                color = RubyRoseSoft
-            )
-            ReportStatRow(
-                label = "تعهدات باز (چک، قسط و دُنگ):",
-                value = PersianNumberUtils.formatToman(activeCommitments, showUnit = true, hideAmount = hideAmounts),
-                color = SaffronGoldLight
-            )
-        }
-
-        // Breakdown by Bank
-        if (expensesByBank.isNotEmpty()) {
+        // 2. Jalali Month Navigator (when in Month-by-Month mode)
+        if (isMonthlyMode) {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(OrosiSurfaceContainer)
-                    .border(1.dp, OrosiHairline, RoundedCornerShape(22.dp))
-                    .padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text(
-                    text = "تفکیک مخارج بر اساس بانک",
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    color = PersianLapisLight
-                )
-                expensesByBank.forEach { (bank, amount) ->
-                    val ratio = if (totalExpense > 0L) {
-                        (amount.toFloat() / totalExpense.toFloat()).coerceIn(0.05f, 1f)
-                    } else 0.1f
-
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(CommCardShape20)
+                        .background(OrosiSurfaceContainer)
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = {
+                            selectedYearMonthKey = JalaliCalendarUtils.shiftJalaliYearMonth(selectedYearMonthKey, -1)
+                        },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("report_prev_month_button")
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(OrosiSurfaceHigh)
                         ) {
-                            Text(
-                                text = "بانک $bank",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                                color = AlabasterSilk
-                            )
-                            Text(
-                                text = PersianNumberUtils.formatToman(amount, showUnit = true, hideAmount = hideAmounts),
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                color = NishapurTurquoiseSoft
+                            Icon(
+                                imageVector = Icons.Default.ChevronRight,
+                                contentDescription = "ماه قبل",
+                                tint = AlabasterSilk,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
-                        LinearProgressIndicator(
-                            progress = { ratio },
-                            color = NishapurTurquoise,
-                            trackColor = OrosiHairline,
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier
+                            .heightIn(min = 44.dp)
+                            .clip(CommPillShape50)
+                            .background(OrosiSurfaceHigh.copy(alpha = 0.78f))
+                            .clickable { showMonthPickerSheet = true }
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .testTag("report_month_picker_button")
+                    ) {
+                        Text(
+                            text = selectedMonthLabel,
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 15.5.sp
+                            ),
+                            color = AlabasterSilk
+                        )
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowDown,
+                            contentDescription = "انتخاب سریع ماه گزارش",
+                            tint = NishapurTurquoiseSoft,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = {
+                            if (canGoNextMonth) {
+                                selectedYearMonthKey = JalaliCalendarUtils.shiftJalaliYearMonth(selectedYearMonthKey, 1)
+                            }
+                        },
+                        enabled = canGoNextMonth,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("report_next_month_button")
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .height(6.dp)
-                                .clip(RoundedCornerShape(50))
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (canGoNextMonth) OrosiSurfaceHigh else OrosiSurfaceHigh.copy(alpha = 0.35f)
+                                )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ChevronLeft,
+                                contentDescription = "ماه بعد",
+                                tint = if (canGoNextMonth) AlabasterSilk else OrosiOnSurfaceVariant.copy(alpha = 0.30f),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+
+                if (isSyncingReportMonths) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "در حال بارگذاری پیامک‌های ماه‌های گذشته...",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = NishapurTurquoiseSoft
+                        )
+                        LinearProgressIndicator(
+                            color = NishapurTurquoiseBright,
+                            trackColor = OrosiSurfaceContainer,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(3.dp)
+                                .clip(CommPillShape50)
                         )
                     }
                 }
             }
         }
 
-        // Breakdown by Purpose / Voice Tag
-        if (expensesByPurpose.isNotEmpty()) {
+        // 3. Comprehensive Summary & Key Metrics Card (Borderless Tonal Grammar)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(CommCardShape22)
+                .background(OrosiSurfaceHigh)
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "خلاصه دخل و خرج (${report.periodLabel})",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                    color = AlabasterSilk,
+                    modifier = Modifier.weight(1f)
+                )
+                if (report.excludedSelfTransferPairs > 0) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(OrosiSurfaceContainer)
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "${PersianNumberUtils.toPersianDigits(report.excludedSelfTransferPairs.toString())} انتقال خودی کسر شد",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                            color = NishapurTurquoiseSoft,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+
+            // Dual KPI tiles (Income vs Expense)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(CommCardShape16)
+                        .background(OrosiBalanceIncomeCardBg)
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(CircleShape)
+                                .background(NishapurTurquoiseBright.copy(alpha = 0.22f))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.ArrowDownward,
+                                contentDescription = null,
+                                tint = NishapurTurquoiseBright,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                        Text(
+                            text = "کل ورودی",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = NishapurTurquoiseSoft
+                        )
+                    }
+                    OrosiAmountText(
+                        amountToman = report.totalIncomeToman,
+                        color = AlabasterSilk,
+                        numberStyle = MaterialTheme.typography.titleSmall.copy(fontSize = 15.5.sp),
+                        numberFontWeight = FontWeight.ExtraBold,
+                        unitStyle = MaterialTheme.typography.labelSmall,
+                        unitColor = NishapurTurquoiseSoft,
+                        isIncome = true,
+                        hideAmount = hideAmounts,
+                        stackedUnit = true
+                    )
+                }
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(CommCardShape16)
+                        .background(OrosiBalanceExpenseCardBg)
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(CircleShape)
+                                .background(RubyRoseSoft.copy(alpha = 0.22f))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.ArrowUpward,
+                                contentDescription = null,
+                                tint = RubyRoseSoft,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                        Text(
+                            text = "کل خرج مصرفی",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = RubyRoseSoft
+                        )
+                    }
+                    OrosiAmountText(
+                        amountToman = report.totalExpenseToman,
+                        color = AlabasterSilk,
+                        numberStyle = MaterialTheme.typography.titleSmall.copy(fontSize = 15.5.sp),
+                        numberFontWeight = FontWeight.ExtraBold,
+                        unitStyle = MaterialTheme.typography.labelSmall,
+                        unitColor = RubyRoseSoft,
+                        hideAmount = hideAmounts,
+                        stackedUnit = true
+                    )
+                }
+            }
+
+            // Net Balance Row
+            val netColor = when {
+                report.netBalanceToman > 0L -> NishapurTurquoiseSoft
+                report.netBalanceToman < 0L -> RubyRoseSoft
+                else -> SaffronGoldLight
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(OrosiSurfaceContainer)
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "تراز خالص این دوره",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                    color = AlabasterSilk
+                )
+                OrosiAmountText(
+                    amountToman = kotlin.math.abs(report.netBalanceToman),
+                    color = netColor,
+                    numberStyle = MaterialTheme.typography.titleSmall,
+                    numberFontWeight = FontWeight.ExtraBold,
+                    unitStyle = MaterialTheme.typography.labelSmall,
+                    unitColor = netColor.copy(alpha = 0.85f),
+                    isIncome = report.netBalanceToman > 0L,
+                    hideAmount = hideAmounts,
+                    prefixText = if (!hideAmounts && report.netBalanceToman < 0L) "کسری" else null
+                )
+            }
+
+            // Key Metrics Strip: Savings Rate | Daily Average | MoM Comparison
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val savingsLabel = report.savingsRatePercent?.let { pct ->
+                    if (pct >= 0) "${PersianNumberUtils.toPersianDigits(pct.toString())}٪"
+                    else "کسری ${PersianNumberUtils.toPersianDigits(kotlin.math.abs(pct).toString())}٪"
+                } ?: "—"
+                val savingsColor = when {
+                    (report.savingsRatePercent ?: 0) > 0 -> NishapurTurquoiseSoft
+                    (report.savingsRatePercent ?: 0) < 0 -> RubyRoseSoft
+                    else -> OrosiOnSurfaceVariant
+                }
+                ReportMetricTile(
+                    label = "نرخ پس‌انداز",
+                    value = if (hideAmounts) "•••" else savingsLabel,
+                    valueColor = savingsColor,
+                    modifier = Modifier.weight(1f)
+                )
+
+                ReportMetricTile(
+                    label = "میانگین روزانه",
+                    value = PersianNumberUtils.formatToman(
+                        report.dailyAverageExpenseToman,
+                        showUnit = false,
+                        hideAmount = hideAmounts
+                    ),
+                    valueColor = AlabasterSilk,
+                    modifier = Modifier.weight(1f)
+                )
+
+                val momDelta = report.expenseDeltaPercent
+                val (momText, momColor) = when {
+                    !isMonthlyMode || momDelta == null -> Pair("—", OrosiOnSurfaceVariant)
+                    momDelta < 0 -> Pair(
+                        "${PersianNumberUtils.toPersianDigits(kotlin.math.abs(momDelta).toString())}٪ کمتر",
+                        NishapurTurquoiseSoft
+                    )
+                    momDelta > 0 -> Pair(
+                        "${PersianNumberUtils.toPersianDigits(momDelta.toString())}٪ بیشتر",
+                        RubyRoseSoft
+                    )
+                    else -> Pair("برابر", SaffronGoldLight)
+                }
+                ReportMetricTile(
+                    label = "نسبت به ماه قبل",
+                    value = if (hideAmounts) "•••" else momText,
+                    valueColor = momColor,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            // Open Commitments Summary Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "تعهدات باز (چک، قسط و دُنگ):",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OrosiOnSurfaceVariant
+                )
+                OrosiAmountText(
+                    amountToman = activeCommitments,
+                    color = SaffronGoldLight,
+                    numberStyle = MaterialTheme.typography.labelLarge,
+                    numberFontWeight = FontWeight.Bold,
+                    unitStyle = MaterialTheme.typography.labelSmall,
+                    unitColor = SaffronGoldLight.copy(alpha = 0.8f),
+                    hideAmount = hideAmounts
+                )
+            }
+        }
+
+        // 4. Interactive 6-Month Grouped Bar Chart (Monthly Mode)
+        if (isMonthlyMode && trendPoints.isNotEmpty()) {
+            SixMonthGroupedBarChartCard(
+                points = trendPoints,
+                selectedYearMonthKey = selectedYearMonthKey,
+                onSelectMonth = { ym -> selectedYearMonthKey = ym }
+            )
+        }
+
+        // 5. Expense Tagging Coverage Progress Card
+        val totalExpenseCount = report.taggedExpenseCount + report.untaggedExpenseCount
+        if (totalExpenseCount > 0 && report.totalExpenseToman > 0L) {
+            val taggedRatio = (report.taggedExpenseToman.toFloat() / report.totalExpenseToman.toFloat())
+                .coerceIn(0f, 1f)
+            val taggedPercent = (taggedRatio * 100f).toInt()
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(22.dp))
+                    .clip(CommCardShape22)
                     .background(OrosiSurfaceContainer)
-                    .border(1.dp, OrosiHairline, RoundedCornerShape(22.dp))
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "شفافیت بابتِ مخارج",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = AlabasterSilk
+                    )
+                    Text(
+                        text = "${PersianNumberUtils.toPersianDigits(taggedPercent.toString())}٪ مشخص شده",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
+                        color = if (taggedPercent >= 70) NishapurTurquoiseSoft else SaffronGoldLight
+                    )
+                }
+                LinearProgressIndicator(
+                    progress = { taggedRatio.coerceAtLeast(0.03f) },
+                    color = if (taggedPercent >= 70) NishapurTurquoiseBright else SaffronGoldBright,
+                    trackColor = OrosiSurfaceHigh,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(7.dp)
+                        .clip(CommPillShape50)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "مشخص‌شده: ${PersianNumberUtils.toPersianDigits(report.taggedExpenseCount.toString())} مورد",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = NishapurTurquoiseSoft
+                    )
+                    Text(
+                        text = "بدون بابت: ${PersianNumberUtils.toPersianDigits(report.untaggedExpenseCount.toString())} مورد",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = OrosiOnSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        // 6. Breakdown by Bank (Self-transfer cleaned)
+        if (report.expensesByBank.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(CommCardShape22)
+                    .background(OrosiSurfaceContainer)
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "تفکیک مخارج بر اساس بانک",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = PersianLapisLight
+                )
+                val maxBankExpense = report.expensesByBank.maxOf { it.second }.coerceAtLeast(1L)
+                report.expensesByBank.forEach { (bank, amount) ->
+                    val ratio = (amount.toFloat() / maxBankExpense.toFloat()).coerceIn(0.06f, 1f)
+                    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "بانک $bank",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = AlabasterSilk
+                            )
+                            OrosiAmountText(
+                                amountToman = amount,
+                                color = NishapurTurquoiseSoft,
+                                numberStyle = MaterialTheme.typography.bodyMedium,
+                                numberFontWeight = FontWeight.Bold,
+                                unitStyle = MaterialTheme.typography.labelSmall,
+                                unitColor = NishapurTurquoiseSoft.copy(alpha = 0.8f),
+                                hideAmount = hideAmounts
+                            )
+                        }
+                        LinearProgressIndicator(
+                            progress = { ratio },
+                            color = NishapurTurquoise,
+                            trackColor = OrosiSurfaceHigh,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(6.dp)
+                                .clip(CommPillShape50)
+                        )
+                    }
+                }
+            }
+        }
+
+        // 7. Top Tagged Expenses (High-value labeled spending insights)
+        if (report.topTaggedExpenses.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(CommCardShape22)
+                    .background(OrosiSurfaceContainer)
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "بیشترین مخارج برچسب‌خورده",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = RubyRoseSoft
+                )
+                report.topTaggedExpenses.forEach { (purposeLabel, amount) ->
+                    ReportAmountRow(
+                        label = purposeLabel,
+                        amountToman = amount,
+                        color = AlabasterSilk,
+                        hideAmounts = hideAmounts
+                    )
+                }
+            }
+        }
+
+        // 8. Top All Expenses (Preserved classic breakdown including untagged bank spends)
+        if (report.topAllExpenses.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(CommCardShape22)
+                    .background(OrosiSurfaceContainer)
                     .padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -552,11 +1037,261 @@ private fun IncomeExpenseReportSection(
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                     color = SaffronGoldLight
                 )
-                expensesByPurpose.forEach { (purposeLabel, amount) ->
-                    ReportStatRow(
+                report.topAllExpenses.forEach { (purposeLabel, amount) ->
+                    ReportAmountRow(
                         label = purposeLabel,
-                        value = PersianNumberUtils.formatToman(amount, showUnit = true, hideAmount = hideAmounts),
-                        color = AlabasterSilk
+                        amountToman = amount,
+                        color = AlabasterSilk,
+                        hideAmounts = hideAmounts
+                    )
+                }
+            }
+        }
+
+        // 9. Top Income Sources
+        if (report.topIncomeSources.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(CommCardShape22)
+                    .background(OrosiSurfaceContainer)
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "بیشترین منابع واریز",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = NishapurTurquoiseSoft
+                )
+                report.topIncomeSources.forEach { (sourceLabel, amount) ->
+                    ReportAmountRow(
+                        label = sourceLabel,
+                        amountToman = amount,
+                        color = NishapurTurquoiseSoft,
+                        isIncome = true,
+                        hideAmounts = hideAmounts
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+    }
+
+    if (showMonthPickerSheet) {
+        ReportMonthPickerSheet(
+            selectedYearMonthKey = selectedYearMonthKey,
+            maxYearMonthKey = currentYearMonthKey,
+            onSelectYearMonth = { ym ->
+                selectedYearMonthKey = ym
+                showMonthPickerSheet = false
+            },
+            onDismiss = { showMonthPickerSheet = false }
+        )
+    }
+}
+
+@Composable
+private fun ReportMetricTile(
+    label: String,
+    value: String,
+    valueColor: Color,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(OrosiSurfaceContainer)
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+            color = OrosiOnSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelLarge.copy(
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 12.5.sp
+            ),
+            color = valueColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun SixMonthGroupedBarChartCard(
+    points: List<MonthlyReportBarPoint>,
+    selectedYearMonthKey: Int,
+    onSelectMonth: (Int) -> Unit
+) {
+    val maxVal = remember(points) {
+        points.maxOfOrNull { maxOf(it.incomeToman, it.expenseToman) }?.coerceAtLeast(1L) ?: 1L
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(CommCardShape22)
+            .background(OrosiSurfaceContainer)
+            .padding(18.dp)
+            .testTag("reports_6month_chart_card"),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "روند ۶ ماه اخیر",
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                color = AlabasterSilk
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(NishapurTurquoiseBright)
+                    )
+                    Text(
+                        text = "ورودی",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = OrosiOnSurfaceVariant
+                    )
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(RubyRoseSoft)
+                    )
+                    Text(
+                        text = "خرج",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = OrosiOnSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        // Pure lightweight Compose Canvas for 120Hz fluidity
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(124.dp)
+        ) {
+            val count = points.size.coerceAtLeast(1)
+            val slotWidth = size.width / count
+            val barWidth = (slotWidth * 0.24f).coerceIn(8f, 22f)
+            val barGap = (slotWidth * 0.08f).coerceIn(3f, 8f)
+            val chartBottom = size.height - 6f
+            val usableHeight = (size.height - 16f).coerceAtLeast(24f)
+
+            // Subtle horizontal guide lines
+            val guideColor = OrosiHairline.copy(alpha = 0.55f)
+            for (step in 1..2) {
+                val y = chartBottom - usableHeight * (step / 3f)
+                drawLine(
+                    color = guideColor,
+                    start = Offset(0f, y),
+                    end = Offset(size.width, y),
+                    strokeWidth = 1.dp.toPx()
+                )
+            }
+
+            // Render points left-to-right matching the Row labels below (in RTL, index 0 is on the right)
+            points.forEachIndexed { idx, pt ->
+                // Align with RTL Row order (index 0 at rightmost slot)
+                val visualIndex = (count - 1) - idx
+                val slotStart = visualIndex * slotWidth
+                val centerX = slotStart + slotWidth / 2f
+                val isSelected = pt.yearMonthKey == selectedYearMonthKey
+
+                if (isSelected) {
+                    drawRoundRect(
+                        color = PersianLapis.copy(alpha = 0.42f),
+                        topLeft = Offset(slotStart + 3f, 2f),
+                        size = Size((slotWidth - 6f).coerceAtLeast(4f), size.height - 4f),
+                        cornerRadius = CornerRadius(12.dp.toPx(), 12.dp.toPx())
+                    )
+                }
+
+                val incHeight = if (pt.incomeToman > 0L) {
+                    (usableHeight * (pt.incomeToman.toFloat() / maxVal.toFloat())).coerceAtLeast(6.dp.toPx())
+                } else 3.dp.toPx()
+
+                val expHeight = if (pt.expenseToman > 0L) {
+                    (usableHeight * (pt.expenseToman.toFloat() / maxVal.toFloat())).coerceAtLeast(6.dp.toPx())
+                } else 3.dp.toPx()
+
+                val radius = CornerRadius(barWidth / 2f, barWidth / 2f)
+
+                // Income bar
+                drawRoundRect(
+                    color = if (isSelected) NishapurTurquoiseBright else NishapurTurquoiseSoft.copy(alpha = 0.65f),
+                    topLeft = Offset(centerX - barWidth - barGap / 2f, chartBottom - incHeight),
+                    size = Size(barWidth, incHeight),
+                    cornerRadius = radius
+                )
+
+                // Expense bar
+                drawRoundRect(
+                    color = if (isSelected) RubyRoseSoft else RubyRose.copy(alpha = 0.72f),
+                    topLeft = Offset(centerX + barGap / 2f, chartBottom - expHeight),
+                    size = Size(barWidth, expHeight),
+                    cornerRadius = radius
+                )
+            }
+        }
+
+        // Interactive Tappable Month Labels Row (tap any month to inspect its full report)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            points.forEach { pt ->
+                val isSelected = pt.yearMonthKey == selectedYearMonthKey
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 44.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (isSelected) PersianLapis else Color.Transparent)
+                        .clickable { onSelectMonth(pt.yearMonthKey) }
+                        .padding(horizontal = 2.dp, vertical = 6.dp)
+                        .testTag("report_chart_month_${pt.yearMonthKey}")
+                ) {
+                    Text(
+                        text = pt.shortMonthName,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 11.sp,
+                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium
+                        ),
+                        color = if (isSelected) AlabasterSilk else OrosiOnSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center
                     )
                 }
             }
@@ -564,11 +1299,136 @@ private fun IncomeExpenseReportSection(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ReportStatRow(
+private fun ReportMonthPickerSheet(
+    selectedYearMonthKey: Int,
+    maxYearMonthKey: Int,
+    onSelectYearMonth: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val maxYear = maxYearMonthKey / 100
+    var pickerYear by remember(selectedYearMonthKey) {
+        mutableIntStateOf((selectedYearMonthKey / 100).coerceIn(1395, maxYear))
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = OrosiSurfaceLow,
+        contentColor = AlabasterSilk
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text(
+                text = "انتخاب ماه گزارش",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                color = AlabasterSilk
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(CommCardShape16)
+                    .background(OrosiSurfaceContainer)
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    onClick = { pickerYear = (pickerYear - 1).coerceAtLeast(1395) },
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = "سال قبل",
+                        tint = AlabasterSilk
+                    )
+                }
+                Text(
+                    text = "سال ${PersianNumberUtils.toPersianDigits(pickerYear.toString())}",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                    color = AlabasterSilk
+                )
+                IconButton(
+                    onClick = { if (pickerYear < maxYear) pickerYear += 1 },
+                    enabled = pickerYear < maxYear,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ChevronLeft,
+                        contentDescription = "سال بعد",
+                        tint = if (pickerYear < maxYear) AlabasterSilk else OrosiOnSurfaceVariant.copy(alpha = 0.35f)
+                    )
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                for (rowIdx in 0 until 4) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        for (colIdx in 0 until 3) {
+                            val monthNum = rowIdx * 3 + colIdx + 1
+                            val ymKey = pickerYear * 100 + monthNum
+                            val isEnabled = ymKey <= maxYearMonthKey
+                            val isSelected = ymKey == selectedYearMonthKey
+                            Surface(
+                                onClick = { if (isEnabled) onSelectYearMonth(ymKey) },
+                                enabled = isEnabled,
+                                shape = RoundedCornerShape(14.dp),
+                                color = when {
+                                    isSelected -> NishapurTurquoiseDeep
+                                    isEnabled -> OrosiSurfaceHigh
+                                    else -> OrosiSurfaceContainer.copy(alpha = 0.38f)
+                                },
+                                border = if (isSelected) {
+                                    androidx.compose.foundation.BorderStroke(1.3.dp, NishapurTurquoiseBright)
+                                } else null,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
+                            ) {
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier.padding(vertical = 12.dp, horizontal = 6.dp)
+                                ) {
+                                    Text(
+                                        text = JalaliCalendarUtils.jalaliMonthName(monthNum),
+                                        style = MaterialTheme.typography.labelLarge.copy(
+                                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold
+                                        ),
+                                        color = when {
+                                            isSelected -> AlabasterSilk
+                                            isEnabled -> AlabasterSilk.copy(alpha = 0.90f)
+                                            else -> OrosiOnSurfaceVariant.copy(alpha = 0.35f)
+                                        },
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReportAmountRow(
     label: String,
-    value: String,
-    color: Color
+    amountToman: Long,
+    color: Color,
+    isIncome: Boolean = false,
+    hideAmounts: Boolean = false
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -584,10 +1444,15 @@ private fun ReportStatRow(
             overflow = TextOverflow.Ellipsis
         )
         Spacer(modifier = Modifier.width(8.dp))
-        Text(
-            text = value,
-            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-            color = color
+        OrosiAmountText(
+            amountToman = amountToman,
+            color = color,
+            numberStyle = MaterialTheme.typography.titleSmall,
+            numberFontWeight = FontWeight.Bold,
+            unitStyle = MaterialTheme.typography.labelSmall,
+            unitColor = color.copy(alpha = 0.8f),
+            isIncome = isIncome,
+            hideAmount = hideAmounts
         )
     }
 }
@@ -612,11 +1477,6 @@ private fun SpaciousPurpleSayyadCard(
                     start = Offset(0f, 0f),
                     end = Offset(800f, 600f)
                 )
-            )
-            .border(
-                1.dp,
-                RoyalAmethystSoft.copy(alpha = 0.45f),
-                RoundedCornerShape(24.dp)
             )
             .clickable(onClick = onClick)
             .padding(22.dp)
@@ -644,7 +1504,7 @@ private fun SpaciousPurpleSayyadCard(
             ) {
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(50))
+                        .clip(CommPillShape50)
                         .background(Color.White.copy(alpha = 0.14f))
                         .padding(horizontal = 12.dp, vertical = 5.dp)
                 ) {
@@ -660,15 +1520,16 @@ private fun SpaciousPurpleSayyadCard(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            Text(
-                text = PersianNumberUtils.formatToman(cheque.amountToman, showUnit = true, hideAmount = hideAmounts),
-                style = MaterialTheme.typography.headlineLarge.copy(
-                    fontWeight = FontWeight.Black,
-                    fontSize = 28.sp
-                ),
+            OrosiAmountText(
+                amountToman = cheque.amountToman,
                 color = AlabasterSilk,
-                maxLines = 1,
-                softWrap = false,
+                numberStyle = MaterialTheme.typography.headlineLarge.copy(
+                    fontWeight = FontWeight.Black,
+                    fontSize = 26.sp
+                ),
+                unitStyle = MaterialTheme.typography.titleSmall,
+                unitColor = RoyalAmethystSoft,
+                hideAmount = hideAmounts,
                 modifier = Modifier.testTag("sayyad_hero_amount")
             )
 
@@ -696,9 +1557,8 @@ private fun SpaciousCommitmentCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(OrosiSurfaceHigh)
-            .border(1.dp, accentColor.copy(alpha = 0.30f), RoundedCornerShape(20.dp))
+            .clip(CommCardShape20)
+            .background(OrosiSurfaceContainer)
             .clickable(onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 16.dp)
             .testTag("commitment_card_${commitment.id}")
@@ -743,15 +1603,14 @@ private fun SpaciousCommitmentCard(
 
             Spacer(modifier = Modifier.width(10.dp))
 
-            Text(
-                text = PersianNumberUtils.formatToman(commitment.amountToman, showUnit = true, hideAmount = hideAmounts),
-                style = MaterialTheme.typography.titleMedium.copy(
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
-                ),
+            OrosiAmountText(
+                amountToman = commitment.amountToman,
                 color = accentColor,
-                maxLines = 1,
-                softWrap = false
+                numberStyle = MaterialTheme.typography.titleMedium.copy(fontSize = 14.sp),
+                numberFontWeight = FontWeight.Bold,
+                unitStyle = MaterialTheme.typography.labelSmall,
+                unitColor = accentColor.copy(alpha = 0.8f),
+                hideAmount = hideAmounts
             )
         }
 
@@ -764,7 +1623,7 @@ private fun SpaciousCommitmentCard(
         ) {
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(50))
+                    .clip(CommPillShape50)
                     .background(accentColor.copy(alpha = 0.12f))
                     .padding(horizontal = 10.dp, vertical = 4.dp)
             ) {

@@ -15,6 +15,7 @@ import com.example.domain.OrosiCashflowAnalyzer
 import com.example.domain.ParsedSmsResult
 import com.example.domain.ParsedVoiceExpense
 import com.example.domain.PersianNumberUtils
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
@@ -66,13 +67,10 @@ class OrosiFinanceRepository(
     private fun getPrimaryPrefs() =
         appContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    private suspend fun persistSnapshotToSharedPrefs() {
-        if (appContext == null) return
-        try {
-            val json = exportBackupJson()
-            getPrimaryPrefs()?.edit()?.putString("backup_snapshot_json", json)?.apply()
-        } catch (_: Exception) {
-        }
+    // Room SQLite is the single durable offline store; never serialize full tables + rawSmsBody
+    // into plaintext SharedPreferences on every write (prevents Main-thread freezes & backup leakage).
+    private fun persistSnapshotToSharedPrefs() {
+        // Intentional no-op: users trigger explicit offline JSON export/import via PaydayAndBackupBottomSheet.
     }
 
     private fun isBogusOrTestTransaction(tx: TransactionEntity): Boolean {
@@ -241,11 +239,15 @@ class OrosiFinanceRepository(
             if (!savedJson.isNullOrBlank()) {
                 val restored = importBackupJsonInternal(savedJson, persistToPrefs = false)
                 if (restored) {
+                    getPrimaryPrefs()?.edit()?.remove("backup_snapshot_json")?.apply()
                     cleanupDemoAndDuplicatesIfRealSmsPresent()
                     recalculateRealSafeToSpend()
                     return
                 }
             }
+        } else if (appContext != null && getPrimaryPrefs()?.contains("backup_snapshot_json") == true) {
+            // Scrub legacy plaintext SharedPreferences snapshot once Room already holds data
+            getPrimaryPrefs()?.edit()?.remove("backup_snapshot_json")?.apply()
         }
 
         val nowJalali = JalaliCalendarUtils.timestampToJalali(System.currentTimeMillis())
@@ -1105,6 +1107,8 @@ class OrosiFinanceRepository(
                 if (maxObservedSmsTs > lastMaxSmsTs) {
                     prefs.edit().putLong("last_max_sms_ts_v2", maxObservedSmsTs).apply()
                 }
+            } catch (ce: CancellationException) {
+                throw ce
             } catch (_: SecurityException) {
                 // Permission not yet granted
             } catch (_: Exception) {
@@ -1262,6 +1266,8 @@ class OrosiFinanceRepository(
                     recalculateRealSafeToSpend()
                     persistSnapshotToSharedPrefs()
                 }
+            } catch (ce: CancellationException) {
+                throw ce
             } catch (_: SecurityException) {
             } catch (_: Exception) {
             }
@@ -1462,6 +1468,8 @@ class OrosiFinanceRepository(
                     persistSnapshotToSharedPrefs()
                 }
                 return@withLock effectiveBalance
+            } catch (ce: CancellationException) {
+                throw ce
             } catch (_: SecurityException) {
             } catch (_: Exception) {
             }
@@ -1539,11 +1547,10 @@ class OrosiFinanceRepository(
                 .putBoolean("full_inbox_balance_pass_v3", false)
                 .putBoolean("has_real_bank_sms", false)
                 .apply()
-            dao.clearAllTransactions()
-            dao.clearAllBankAccounts()
-            dao.getAllCommitmentsNow().filter { isDemoCommitment(it) }.forEach { demoC ->
-                dao.deleteCommitmentById(demoC.id)
-            }
+            val demoCommitmentIds = dao.getAllCommitmentsNow()
+                .filter { isDemoCommitment(it) }
+                .map { it.id }
+            dao.purgeForRealSmsRescanAtomic(demoCommitmentIds)
             lastCompletedScanEpochMs = 0L
         }
         val count = scanDeviceSmsInboxLast30Days(context, daysBack = 3650, force = true)
@@ -2001,6 +2008,8 @@ class OrosiFinanceRepository(
                 obj.remove(cleanName)
                 prefs?.edit()?.putString("card_balances_v4_json", obj.toString())?.apply()
             }
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (_: Exception) {
         }
         recalculateRealSafeToSpend()
@@ -2189,7 +2198,7 @@ class OrosiFinanceRepository(
         persistSnapshotToSharedPrefs()
     }
 
-    suspend fun exportBackupJson(): String {
+    suspend fun exportBackupJson(): String = withContext(Dispatchers.IO) {
         val settings = dao.getSettingsNow() ?: AppSettingsEntity()
         val txs = dao.getAllTransactionsNow()
         val accounts = dao.getAllBankAccountsNow()
@@ -2271,120 +2280,118 @@ class OrosiFinanceRepository(
         }
         root.put("commitments", compArray)
 
-        return root.toString(2)
+        root.toString(2)
     }
 
     suspend fun importBackupJson(jsonString: String): Boolean {
-        return importBackupJsonInternal(jsonString, persistToPrefs = true)
+        return importBackupJsonInternal(jsonString, persistToPrefs = false)
     }
 
     private suspend fun importBackupJsonInternal(
         jsonString: String,
-        persistToPrefs: Boolean
-    ): Boolean {
-        return try {
+        @Suppress("UNUSED_PARAMETER") persistToPrefs: Boolean
+    ): Boolean = withContext(Dispatchers.IO) {
+        try {
             val root = JSONObject(jsonString)
-            val sObj = root.optJSONObject("settings")
-            if (sObj != null) {
-                val rawDaily = sObj.optLong("dailySafeBudgetToman", 680_000L).coerceAtLeast(0L)
-                dao.saveSettings(
-                    AppSettingsEntity(
-                        id = 1,
-                        dailySafeBudgetToman = PersianNumberUtils.roundDownToCleanThousands(rawDaily),
-                        monthlyBalanceToman = sObj.optLong("monthlyBalanceToman", 18_450_000L).coerceAtLeast(0L),
-                        paydayStartDay = sObj.optInt("paydayStartDay", 1),
-                        paydayCycleLabel = sObj.optString("paydayCycleLabel", "۱ آبان تا ۳۰ آبان"),
-                        autoDetectSalary = sObj.optBoolean("autoDetectSalary", true),
-                        hideAmounts = sObj.optBoolean("hideAmounts", false),
-                        onlyTankhahMode = sObj.optBoolean("onlyTankhahMode", true),
-                        tankhahModeEnabled = sObj.optBoolean("tankhahModeEnabled", false),
-                        selectedFontFamily = sObj.optString("selectedFontFamily", "IRANSANSX")
-                    )
+            val parsedSettings = root.optJSONObject("settings")?.let { sObj ->
+                val rawDaily = sObj.optLong("dailySafeBudgetToman", 0L).coerceAtLeast(0L)
+                AppSettingsEntity(
+                    id = 1,
+                    dailySafeBudgetToman = PersianNumberUtils.roundDownToCleanThousands(rawDaily),
+                    monthlyBalanceToman = sObj.optLong("monthlyBalanceToman", 0L).coerceAtLeast(0L),
+                    paydayStartDay = sObj.optInt("paydayStartDay", 1).coerceIn(1, 30),
+                    paydayCycleLabel = sObj.optString("paydayCycleLabel", ""),
+                    autoDetectSalary = sObj.optBoolean("autoDetectSalary", true),
+                    hideAmounts = sObj.optBoolean("hideAmounts", false),
+                    onlyTankhahMode = sObj.optBoolean("onlyTankhahMode", true),
+                    tankhahModeEnabled = sObj.optBoolean("tankhahModeEnabled", false),
+                    selectedFontFamily = sObj.optString("selectedFontFamily", "IRANSANSX")
                 )
             }
 
-            val accArray = root.optJSONArray("bankAccounts")
-            if (accArray != null) {
-                dao.clearAllBankAccounts()
-                val accList = mutableListOf<BankAccountEntity>()
-                for (i in 0 until accArray.length()) {
-                    val o = accArray.getJSONObject(i)
-                    accList.add(
-                        BankAccountEntity(
-                            bankName = o.optString("bankName"),
-                            nameEn = o.optString("nameEn"),
-                            balanceToman = o.optLong("balanceToman", 0L),
-                            isTankhah = o.optBoolean("isTankhah", true),
-                            cardLast4 = o.optString("cardLast4", ""),
-                            lastUpdatedTimestamp = o.optLong("lastUpdatedTimestamp", System.currentTimeMillis()),
-                            isManual = o.optBoolean("isManual", false)
+            val parsedAccounts = root.optJSONArray("bankAccounts")?.let { accArray ->
+                buildList(accArray.length()) {
+                    for (i in 0 until accArray.length()) {
+                        val o = accArray.getJSONObject(i)
+                        add(
+                            BankAccountEntity(
+                                bankName = o.optString("bankName"),
+                                nameEn = o.optString("nameEn"),
+                                balanceToman = o.optLong("balanceToman", 0L),
+                                isTankhah = o.optBoolean("isTankhah", true),
+                                cardLast4 = o.optString("cardLast4", ""),
+                                lastUpdatedTimestamp = o.optLong("lastUpdatedTimestamp", System.currentTimeMillis()),
+                                isManual = o.optBoolean("isManual", false)
+                            )
                         )
-                    )
+                    }
                 }
-                dao.upsertBankAccounts(accList)
             }
 
-            val txArray = root.optJSONArray("transactions")
-            if (txArray != null) {
-                dao.clearAllTransactions()
-                val list = mutableListOf<TransactionEntity>()
-                for (i in 0 until txArray.length()) {
-                    val o = txArray.getJSONObject(i)
-                    val ts = o.optLong("timestamp", System.currentTimeMillis())
-                    val realJalali = JalaliCalendarUtils.fromTimestamp(ts)
-                    val balanceAfter = if (o.has("balanceAfterToman")) o.optLong("balanceAfterToman") else null
-                    list.add(
-                        TransactionEntity(
-                            title = o.optString("title"),
-                            storeName = o.optString("storeName"),
-                            purpose = o.optString("purpose"),
-                            totalAmountToman = o.optLong("totalAmountToman"),
-                            userShareToman = o.optLong("userShareToman"),
-                            dongAmountToman = o.optLong("dongAmountToman"),
-                            dongFriendName = o.optString("dongFriendName"),
-                            weekdayDate = o.optString("weekdayDate").takeIf { it.isNotBlank() && it != "جمعه ۱ آبان" }
-                                ?: realJalali.weekdayDate,
-                            timeStr = o.optString("timeStr").takeIf { it.isNotBlank() && it != "۱۸:۱۰" }
-                                ?: realJalali.timeStr,
-                            cardInfo = o.optString("cardInfo", "کارت بانکی"),
-                            type = o.optString("type", "EXPENSE"),
-                            isUntagged = o.optBoolean("isUntagged", false),
-                            timestamp = ts,
-                            balanceAfterToman = balanceAfter,
-                            rawSmsBody = o.optString("rawSmsBody", ""),
-                            bankName = o.optString("bankName", "")
+            val parsedTransactions = root.optJSONArray("transactions")?.let { txArray ->
+                buildList(txArray.length()) {
+                    for (i in 0 until txArray.length()) {
+                        val o = txArray.getJSONObject(i)
+                        val ts = o.optLong("timestamp", System.currentTimeMillis())
+                        val realJalali = JalaliCalendarUtils.fromTimestamp(ts)
+                        val balanceAfter = if (o.has("balanceAfterToman")) o.optLong("balanceAfterToman") else null
+                        add(
+                            TransactionEntity(
+                                title = o.optString("title"),
+                                storeName = o.optString("storeName"),
+                                purpose = o.optString("purpose"),
+                                totalAmountToman = o.optLong("totalAmountToman"),
+                                userShareToman = o.optLong("userShareToman"),
+                                dongAmountToman = o.optLong("dongAmountToman"),
+                                dongFriendName = o.optString("dongFriendName"),
+                                weekdayDate = o.optString("weekdayDate").takeIf { it.isNotBlank() && it != "جمعه ۱ آبان" }
+                                    ?: realJalali.weekdayDate,
+                                timeStr = o.optString("timeStr").takeIf { it.isNotBlank() && it != "۱۸:۱۰" }
+                                    ?: realJalali.timeStr,
+                                cardInfo = o.optString("cardInfo", "کارت بانکی"),
+                                type = o.optString("type", "EXPENSE"),
+                                isUntagged = o.optBoolean("isUntagged", false),
+                                timestamp = ts,
+                                balanceAfterToman = balanceAfter,
+                                rawSmsBody = o.optString("rawSmsBody", ""),
+                                bankName = o.optString("bankName", "")
+                            )
                         )
-                    )
+                    }
                 }
-                dao.insertTransactions(list)
             }
 
-            val compArray = root.optJSONArray("commitments")
-            if (compArray != null) {
-                dao.clearAllCommitments()
-                val list = mutableListOf<CommitmentEntity>()
-                for (i in 0 until compArray.length()) {
-                    val o = compArray.getJSONObject(i)
-                    list.add(
-                        CommitmentEntity(
-                            category = o.optString("category", "SAYYAD_ISSUED"),
-                            title = o.optString("title"),
-                            counterparty = o.optString("counterparty"),
-                            amountToman = o.optLong("amountToman"),
-                            dueDateStr = o.optString("dueDateStr"),
-                            sayyadId = o.optString("sayyadId"),
-                            statusText = o.optString("statusText"),
-                            isSettled = o.optBoolean("isSettled", false),
-                            timestamp = o.optLong("timestamp", System.currentTimeMillis())
+            val parsedCommitments = root.optJSONArray("commitments")?.let { compArray ->
+                buildList(compArray.length()) {
+                    for (i in 0 until compArray.length()) {
+                        val o = compArray.getJSONObject(i)
+                        add(
+                            CommitmentEntity(
+                                category = o.optString("category", "SAYYAD_ISSUED"),
+                                title = o.optString("title"),
+                                counterparty = o.optString("counterparty"),
+                                amountToman = o.optLong("amountToman"),
+                                dueDateStr = o.optString("dueDateStr"),
+                                sayyadId = o.optString("sayyadId"),
+                                statusText = o.optString("statusText"),
+                                isSettled = o.optBoolean("isSettled", false),
+                                timestamp = o.optLong("timestamp", System.currentTimeMillis())
+                            )
                         )
-                    )
+                    }
                 }
-                dao.insertCommitments(list)
             }
-            if (persistToPrefs) {
-                persistSnapshotToSharedPrefs()
-            }
+
+            // Parse succeeded cleanly — commit all tables inside a single atomic Room @Transaction
+            dao.restoreSnapshotAtomic(
+                settings = parsedSettings,
+                bankAccounts = parsedAccounts,
+                transactions = parsedTransactions,
+                commitments = parsedCommitments
+            )
             true
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (_: Exception) {
             false
         }

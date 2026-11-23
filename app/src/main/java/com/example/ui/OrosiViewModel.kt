@@ -22,6 +22,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -101,10 +102,37 @@ data class OrosiUiState(
     val statusBannerMessage: String? = null
 )
 
-class OrosiViewModel(application: Application) : AndroidViewModel(application) {
+class OrosiViewModel private constructor(
+    application: Application,
+    private val dao: com.example.data.local.OrosiDao,
+    private val repository: OrosiFinanceRepository,
+    autoInit: Boolean
+) : AndroidViewModel(application) {
+
+    constructor(application: Application) : this(
+        application = application,
+        dao = OrosiDatabase.getInstance(application.applicationContext).orosiDao(),
+        repository = OrosiFinanceRepository(
+            OrosiDatabase.getInstance(application.applicationContext).orosiDao(),
+            application.applicationContext
+        ),
+        autoInit = true
+    )
+
+    companion object {
+        internal fun createForTesting(
+            application: Application,
+            dao: com.example.data.local.OrosiDao,
+            repository: OrosiFinanceRepository
+        ): OrosiViewModel = OrosiViewModel(
+            application = application,
+            dao = dao,
+            repository = repository,
+            autoInit = false
+        )
+    }
+
     private val appContext = application.applicationContext
-    private val dao = OrosiDatabase.getInstance(appContext).orosiDao()
-    private val repository = OrosiFinanceRepository(dao, appContext)
 
     private val _currentScreen = MutableStateFlow(OrosiScreen.HOME)
     private val _selectedCommitmentTab = MutableStateFlow(CommitmentTab.SAYYAD)
@@ -113,6 +141,7 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
     )
     private var hasUserChangedMonthManually = false
     private val _voiceState = MutableStateFlow(VoiceUiState())
+    val voiceState: StateFlow<VoiceUiState> = _voiceState.asStateFlow()
     private val _selectedTransactionForDetail = MutableStateFlow<TransactionEntity?>(null)
     private val _selectedCommitmentForAction = MutableStateFlow<CommitmentEntity?>(null)
     private val _showVoiceOverlaySheet = MutableStateFlow(false)
@@ -123,28 +152,33 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
     private val _showAddBankAccountModal = MutableStateFlow(false)
     private val _isSyncingSms = MutableStateFlow(false)
     private val _loadingMonthKey = MutableStateFlow<Int?>(null)
+    private val _isSyncingBackgroundMonths = MutableStateFlow(false)
+    val isSyncingBackgroundMonths: StateFlow<Boolean> = _isSyncingBackgroundMonths.asStateFlow()
     private val _selectedAccountForEdit = MutableStateFlow<BankAccountEntity?>(null)
     private val _selectedAccountCustomSenders = MutableStateFlow<List<String>>(emptyList())
     private val _isRescanningSingleBank = MutableStateFlow(false)
     private val _backupJsonText = MutableStateFlow("")
     private val _statusBannerMessage = MutableStateFlow<String?>(null)
     private var monthSyncJob: kotlinx.coroutines.Job? = null
+    private var backgroundMonthsSyncJob: kotlinx.coroutines.Job? = null
 
     init {
-        viewModelScope.launch {
-            com.example.ui.components.JibemanAssetLogoCache.preloadAsync(appContext)
-        }
-        viewModelScope.launch {
-            try {
-                repository.ensureSeeded()
-                val hasCachedData = dao.getAllBankAccountsNow().isNotEmpty() || dao.getAllTransactionsNow().isNotEmpty()
-                if (!hasCachedData) {
-                    _isSyncingSms.value = true
+        if (autoInit) {
+            viewModelScope.launch {
+                com.example.ui.components.JibemanAssetLogoCache.preloadAsync(appContext)
+            }
+            viewModelScope.launch {
+                try {
+                    repository.ensureSeeded()
+                    val hasCachedData = dao.getAllBankAccountsNow().isNotEmpty() || dao.getAllTransactionsNow().isNotEmpty()
+                    if (!hasCachedData) {
+                        _isSyncingSms.value = true
+                    }
+                    repository.scanDeviceSmsInboxLast30Days(appContext, daysBack = 3650)
+                    syncInitialSelectedMonthWithTransactions()
+                } finally {
+                    _isSyncingSms.value = false
                 }
-                repository.scanDeviceSmsInboxLast30Days(appContext, daysBack = 3650)
-                syncInitialSelectedMonthWithTransactions()
-            } finally {
-                _isSyncingSms.value = false
             }
         }
     }
@@ -195,21 +229,19 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
         )
     }.combine(
         combine(
-            _voiceState,
             _showVoiceOverlaySheet,
             _showHeroMathSheet,
             _showSmsSimulatorModal,
             _showPaydayBackupModal
-        ) { voice, voiceSheet, mathSheet, smsModal, paydayModal ->
-            Tuple5(voice, voiceSheet, mathSheet, smsModal, paydayModal)
+        ) { voiceSheet, mathSheet, smsModal, paydayModal ->
+            Tuple4(voiceSheet, mathSheet, smsModal, paydayModal)
         }
     ) { base, modals ->
         base.copy(
-            voiceState = modals.first,
-            showVoiceOverlaySheet = modals.second,
-            showHeroMathSheet = modals.third,
-            showSmsSimulatorModal = modals.fourth,
-            showPaydayBackupModal = modals.fifth
+            showVoiceOverlaySheet = modals.first,
+            showHeroMathSheet = modals.second,
+            showSmsSimulatorModal = modals.third,
+            showPaydayBackupModal = modals.fourth
         )
     }.combine(
         combine(
@@ -291,6 +323,29 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
     fun rescanSelectedMonth() {
         val targetKey = _selectedYearMonthKey.value
         syncMonthIfNeeded(targetKey, force = true)
+    }
+
+    /**
+     * Lazily syncs one or more Jalali months (e.g. from Hero Balance Sheet `<`/`>` or
+     * Comprehensive Month-by-Month Reports) without hijacking the Transactions tab selection.
+     */
+    fun ensureJalaliMonthsSynced(yearMonthKeys: List<Int>, force: Boolean = false) {
+        val currentYm = JalaliCalendarUtils.fromTimestamp(System.currentTimeMillis()).yearMonthKey
+        val toSync = yearMonthKeys
+            .distinct()
+            .filter { it <= currentYm && (force || !repository.isJalaliMonthSynced(it)) }
+        if (toSync.isEmpty()) return
+        backgroundMonthsSyncJob?.cancel()
+        backgroundMonthsSyncJob = viewModelScope.launch {
+            _isSyncingBackgroundMonths.value = true
+            try {
+                for (ym in toSync) {
+                    repository.syncTransactionsForJalaliMonth(appContext, ym, force = force)
+                }
+            } finally {
+                _isSyncingBackgroundMonths.value = false
+            }
+        }
     }
 
     private fun syncMonthIfNeeded(targetKey: Int, force: Boolean) {

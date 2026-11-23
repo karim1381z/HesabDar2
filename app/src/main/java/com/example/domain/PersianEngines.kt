@@ -260,6 +260,8 @@ object JalaliCalendarUtils {
         else -> 30
     }
 
+    fun jalaliMonthName(month: Int): String = persianMonths.getOrElse(month.coerceIn(1, 12)) { "آذر" }
+
     fun timestampToJalali(timestampMillis: Long): JalaliDateTime = fromTimestamp(timestampMillis)
 
     fun fromTimestamp(timestampMillis: Long): JalaliDateTime {
@@ -692,7 +694,52 @@ data class PaydayCashflowSummary(
     val excludedSelfTransferTotalToman: Long,
     val netBalanceToman: Long,
     val healthStatus: CashflowHealthStatus,
-    val excludedSelfTransferDetails: List<SelfTransferPairDetail> = emptyList()
+    val excludedSelfTransferDetails: List<SelfTransferPairDetail> = emptyList(),
+    val cycleDaysCount: Int = 30,
+    val cycleYearMonthKeys: List<Int> = emptyList(),
+    val includedTransactionCount: Int = 0
+)
+
+data class MonthlyReportTxSnapshot(
+    val id: Long,
+    val type: String,
+    val totalAmountToman: Long,
+    val userShareToman: Long,
+    val bankName: String,
+    val displayTitle: String,
+    val isUntagged: Boolean,
+    val timestamp: Long
+)
+
+data class MonthlyReportBarPoint(
+    val yearMonthKey: Int,
+    val shortMonthName: String,
+    val year: Int,
+    val incomeToman: Long,
+    val expenseToman: Long,
+    val netToman: Long
+)
+
+data class ComprehensiveMonthlyReport(
+    val periodLabel: String,
+    val yearMonthKey: Int?, // null = all-time
+    val totalIncomeToman: Long,
+    val totalExpenseToman: Long,
+    val netBalanceToman: Long,
+    val savingsRatePercent: Int?, // null when income == 0
+    val dailyAverageExpenseToman: Long,
+    val previousMonthExpenseToman: Long?,
+    val expenseDeltaPercent: Int?, // positive = higher spend than prev month, negative = saved vs prev month
+    val excludedSelfTransferPairs: Int,
+    val excludedSelfTransferTotalToman: Long,
+    val taggedExpenseCount: Int,
+    val untaggedExpenseCount: Int,
+    val taggedExpenseToman: Long,
+    val untaggedExpenseToman: Long,
+    val expensesByBank: List<Pair<String, Long>>,
+    val topTaggedExpenses: List<Pair<String, Long>>,
+    val topAllExpenses: List<Pair<String, Long>>,
+    val topIncomeSources: List<Pair<String, Long>>
 )
 
 data class HeroBalanceDisplay(
@@ -770,16 +817,41 @@ object OrosiCashflowAnalyzer {
         dueDateJalali: String,
         paydayStartDay: Int,
         nowMillis: Long = System.currentTimeMillis()
+    ): Boolean = isCommitmentDueInCycle(
+        dueDateJalali = dueDateJalali,
+        paydayStartDay = paydayStartDay,
+        nowMillis = nowMillis,
+        cycleOffsetMonths = 0
+    )
+
+    /**
+     * Checks whether a commitment belongs to the requested payday cycle:
+     * - For the active current cycle (`cycleOffsetMonths == 0`), includes both commitments due inside
+     *   the cycle and already-overdue commitments (`dueTs < window.endExclusiveMillis`).
+     * - For historical past cycles (`cycleOffsetMonths < 0`), strictly includes ONLY commitments whose
+     *   due date falls inside `[window.startMillis, window.endExclusiveMillis)`, so current/future
+     *   installments never leak onto past-month balance sheets.
+     */
+    fun isCommitmentDueInCycle(
+        dueDateJalali: String,
+        paydayStartDay: Int,
+        nowMillis: Long = System.currentTimeMillis(),
+        cycleOffsetMonths: Int = 0
     ): Boolean {
         val clean = dueDateJalali.trim()
-        if (clean.isBlank()) return true
-        val dueTs = JalaliCalendarUtils.jalaliDateStringToTimestampMillis(clean, nowMillis) ?: return true
+        if (clean.isBlank()) return cycleOffsetMonths == 0
+        val dueTs = JalaliCalendarUtils.jalaliDateStringToTimestampMillis(clean, nowMillis)
+            ?: return cycleOffsetMonths == 0
         val window = JalaliCalendarUtils.currentPaydayCycleRange(
             paydayStartDay = paydayStartDay,
             nowMillis = nowMillis,
-            cycleOffsetMonths = 0
+            cycleOffsetMonths = cycleOffsetMonths
         )
-        return dueTs < window.endExclusiveMillis
+        return if (cycleOffsetMonths == 0) {
+            dueTs < window.endExclusiveMillis
+        } else {
+            dueTs >= window.startMillis && dueTs < window.endExclusiveMillis
+        }
     }
 
     /**
@@ -889,6 +961,15 @@ object OrosiCashflowAnalyzer {
             else -> CashflowHealthStatus.DEFICIT
         }
 
+        val cycleDays = ((window.endExclusiveMillis - window.startMillis) / 86_400_000L)
+            .toInt()
+            .coerceIn(28, 31)
+        val startYm = JalaliCalendarUtils.fromTimestamp(window.startMillis).yearMonthKey
+        val endYm = JalaliCalendarUtils.fromTimestamp((window.endExclusiveMillis - 1L).coerceAtLeast(window.startMillis)).yearMonthKey
+        val spannedMonths = if (startYm == endYm) listOf(startYm) else listOf(startYm, endYm)
+
+        val includedCount = incomes.count { it.id !in excludedIds } + expenses.count { it.id !in excludedIds }
+
         return PaydayCashflowSummary(
             cycleLabel = window.label,
             totalIncomeToman = totalIncome,
@@ -898,8 +979,230 @@ object OrosiCashflowAnalyzer {
             excludedSelfTransferTotalToman = selfTransferTotalToman,
             netBalanceToman = netBalance,
             healthStatus = healthStatus,
-            excludedSelfTransferDetails = selfTransferDetails.sortedByDescending { it.timestamp }
+            excludedSelfTransferDetails = selfTransferDetails.sortedByDescending { it.timestamp },
+            cycleDaysCount = cycleDays,
+            cycleYearMonthKeys = spannedMonths,
+            includedTransactionCount = includedCount
         )
+    }
+
+    private fun detectSelfTransferIds(
+        items: List<MonthlyReportTxSnapshot>
+    ): Triple<Set<Long>, Int, Long> {
+        val expenses = items.filter { it.type == "EXPENSE" && isRealBankName(it.bankName) }.sortedBy { it.timestamp }
+        val incomesByAmount = items.filter { it.type == "INCOME" && isRealBankName(it.bankName) }
+            .groupBy { it.totalAmountToman }
+        val excludedIds = HashSet<Long>()
+        val matchedIncomeIds = HashSet<Long>()
+        var pairs = 0
+        var totalToman = 0L
+
+        for (exp in expenses) {
+            val matching = incomesByAmount[exp.totalAmountToman] ?: continue
+            var bestIncome: MonthlyReportTxSnapshot? = null
+            var bestDelta = Long.MAX_VALUE
+            for (inc in matching) {
+                if (inc.id in matchedIncomeIds) continue
+                if (inc.bankName.trim() == exp.bankName.trim()) continue
+                val delta = kotlin.math.abs(inc.timestamp - exp.timestamp)
+                if (delta <= SELF_TRANSFER_MAX_WINDOW_MS && delta < bestDelta) {
+                    bestDelta = delta
+                    bestIncome = inc
+                }
+            }
+            if (bestIncome != null) {
+                excludedIds.add(exp.id)
+                excludedIds.add(bestIncome.id)
+                matchedIncomeIds.add(bestIncome.id)
+                pairs++
+                totalToman += exp.totalAmountToman
+            }
+        }
+        return Triple(excludedIds, pairs, totalToman)
+    }
+
+    /**
+     * Comprehensive Month-by-Month & All-Time Income/Expense report analyzer with automatic
+     * cross-bank self-transfer exclusion, savings rate, daily average spend, MoM comparison,
+     * tagging coverage, and top income/expense breakdowns.
+     */
+    fun analyzeMonthlyReport(
+        transactions: List<MonthlyReportTxSnapshot>,
+        selectedYearMonthKey: Int?, // null = all-time
+        nowMillis: Long = System.currentTimeMillis()
+    ): ComprehensiveMonthlyReport {
+        val valid = transactions.filter { it.totalAmountToman > 0L && it.bankName != "بانک" }
+        val nowJalali = JalaliCalendarUtils.fromTimestamp(nowMillis)
+        val filtered = if (selectedYearMonthKey != null) {
+            val targetYear = selectedYearMonthKey / 100
+            val targetMonth = (selectedYearMonthKey % 100).coerceIn(1, 12)
+            valid.filter { tx ->
+                val j = JalaliCalendarUtils.fromTimestamp(tx.timestamp)
+                j.year == targetYear && j.month == targetMonth
+            }
+        } else {
+            valid
+        }
+
+        val (excludedIds, selfPairs, selfTotal) = detectSelfTransferIds(filtered)
+        val effectiveIncomes = filtered.filter { it.type == "INCOME" && it.id !in excludedIds }
+        val effectiveExpenses = filtered.filter { it.type == "EXPENSE" && it.id !in excludedIds }
+
+        val totalIncome = effectiveIncomes.sumOf { it.userShareToman.takeIf { v -> v > 0L } ?: it.totalAmountToman }
+        val totalExpense = effectiveExpenses.sumOf { it.userShareToman.takeIf { v -> v > 0L } ?: it.totalAmountToman }
+        val netBalance = totalIncome - totalExpense
+        val savingsRate = if (totalIncome > 0L) {
+            ((netBalance * 100L) / totalIncome).toInt().coerceIn(-999, 100)
+        } else {
+            null
+        }
+
+        val daysDivisor = if (selectedYearMonthKey != null) {
+            val y = selectedYearMonthKey / 100
+            val m = (selectedYearMonthKey % 100).coerceIn(1, 12)
+            if (y == nowJalali.year && m == nowJalali.month) {
+                nowJalali.day.coerceAtLeast(1)
+            } else {
+                JalaliCalendarUtils.daysInJalaliMonth(y, m).coerceAtLeast(1)
+            }
+        } else {
+            val distinctDays = effectiveExpenses.map {
+                val j = JalaliCalendarUtils.fromTimestamp(it.timestamp)
+                j.year * 10000 + j.month * 100 + j.day
+            }.toSet().size
+            distinctDays.coerceAtLeast(1)
+        }
+        val dailyAvg = if (totalExpense > 0L) totalExpense / daysDivisor else 0L
+
+        // Month-over-Month comparison when a single Jalali month is selected
+        var prevMonthExpense: Long? = null
+        var deltaPercent: Int? = null
+        if (selectedYearMonthKey != null) {
+            val prevYm = JalaliCalendarUtils.shiftJalaliYearMonth(selectedYearMonthKey, -1)
+            val prevY = prevYm / 100
+            val prevM = (prevYm % 100).coerceIn(1, 12)
+            val prevRows = valid.filter { tx ->
+                val j = JalaliCalendarUtils.fromTimestamp(tx.timestamp)
+                j.year == prevY && j.month == prevM
+            }
+            if (prevRows.isNotEmpty()) {
+                val (prevExcl, _, _) = detectSelfTransferIds(prevRows)
+                val pExp = prevRows
+                    .filter { it.type == "EXPENSE" && it.id !in prevExcl }
+                    .sumOf { it.userShareToman.takeIf { v -> v > 0L } ?: it.totalAmountToman }
+                prevMonthExpense = pExp
+                if (pExp > 0L) {
+                    deltaPercent = (((totalExpense - pExp) * 100L) / pExp).toInt().coerceIn(-999, 999)
+                }
+            }
+        }
+
+        val taggedExp = effectiveExpenses.filter { !it.isUntagged }
+        val untaggedExp = effectiveExpenses.filter { it.isUntagged }
+        val taggedExpTotal = taggedExp.sumOf { it.userShareToman.takeIf { v -> v > 0L } ?: it.totalAmountToman }
+        val untaggedExpTotal = untaggedExp.sumOf { it.userShareToman.takeIf { v -> v > 0L } ?: it.totalAmountToman }
+
+        val expensesByBank = effectiveExpenses
+            .filter { isRealBankName(it.bankName) }
+            .groupBy { it.bankName }
+            .mapValues { (_, list) -> list.sumOf { it.userShareToman.takeIf { v -> v > 0L } ?: it.totalAmountToman } }
+            .filterValues { it > 0L }
+            .entries
+            .sortedByDescending { it.value }
+            .map { it.key to it.value }
+
+        val topTaggedExpenses = taggedExp
+            .groupBy { it.displayTitle.ifBlank { "سایر مخارج" } }
+            .mapValues { (_, list) -> list.sumOf { it.userShareToman.takeIf { v -> v > 0L } ?: it.totalAmountToman } }
+            .filterValues { it > 0L }
+            .entries
+            .sortedByDescending { it.value }
+            .take(8)
+            .map { it.key to it.value }
+
+        val topAllExpenses = effectiveExpenses
+            .groupBy { it.displayTitle.ifBlank { "خرید کارتی" } }
+            .mapValues { (_, list) -> list.sumOf { it.userShareToman.takeIf { v -> v > 0L } ?: it.totalAmountToman } }
+            .filterValues { it > 0L }
+            .entries
+            .sortedByDescending { it.value }
+            .take(8)
+            .map { it.key to it.value }
+
+        val topIncomeSources = effectiveIncomes
+            .groupBy {
+                if (it.isUntagged) "واریز برچسب‌نخورده (${it.bankName})" else it.displayTitle.ifBlank { "واریز به حساب" }
+            }
+            .mapValues { (_, list) -> list.sumOf { it.userShareToman.takeIf { v -> v > 0L } ?: it.totalAmountToman } }
+            .filterValues { it > 0L }
+            .entries
+            .sortedByDescending { it.value }
+            .take(6)
+            .map { it.key to it.value }
+
+        val periodLabel = if (selectedYearMonthKey != null) {
+            val y = selectedYearMonthKey / 100
+            val m = (selectedYearMonthKey % 100).coerceIn(1, 12)
+            "${JalaliCalendarUtils.jalaliMonthName(m)} ${PersianNumberUtils.toPersianDigits(y.toString())}"
+        } else {
+            "کل زمان‌ها"
+        }
+
+        return ComprehensiveMonthlyReport(
+            periodLabel = periodLabel,
+            yearMonthKey = selectedYearMonthKey,
+            totalIncomeToman = totalIncome,
+            totalExpenseToman = totalExpense,
+            netBalanceToman = netBalance,
+            savingsRatePercent = savingsRate,
+            dailyAverageExpenseToman = dailyAvg,
+            previousMonthExpenseToman = prevMonthExpense,
+            expenseDeltaPercent = deltaPercent,
+            excludedSelfTransferPairs = selfPairs,
+            excludedSelfTransferTotalToman = selfTotal,
+            taggedExpenseCount = taggedExp.size,
+            untaggedExpenseCount = untaggedExp.size,
+            taggedExpenseToman = taggedExpTotal,
+            untaggedExpenseToman = untaggedExpTotal,
+            expensesByBank = expensesByBank,
+            topTaggedExpenses = topTaggedExpenses,
+            topAllExpenses = topAllExpenses,
+            topIncomeSources = topIncomeSources
+        )
+    }
+
+    /**
+     * Builds the last [monthCount] chronological Jalali months ending at [anchorYearMonthKey]
+     * for the interactive grouped bar chart in `CommitmentsScreen` Reports.
+     */
+    fun buildLastMonthsTrend(
+        transactions: List<MonthlyReportTxSnapshot>,
+        anchorYearMonthKey: Int,
+        monthCount: Int = 6
+    ): List<MonthlyReportBarPoint> {
+        val valid = transactions.filter { it.totalAmountToman > 0L && it.bankName != "بانک" }
+        val keys = (-(monthCount - 1)..0).map { offset ->
+            JalaliCalendarUtils.shiftJalaliYearMonth(anchorYearMonthKey, offset)
+        }
+        val groupedByYm = valid.groupBy { JalaliCalendarUtils.fromTimestamp(it.timestamp).yearMonthKey }
+        return keys.map { ym ->
+            val rows = groupedByYm[ym].orEmpty()
+            val (excl, _, _) = detectSelfTransferIds(rows)
+            val inc = rows.filter { it.type == "INCOME" && it.id !in excl }
+                .sumOf { it.userShareToman.takeIf { v -> v > 0L } ?: it.totalAmountToman }
+            val exp = rows.filter { it.type == "EXPENSE" && it.id !in excl }
+                .sumOf { it.userShareToman.takeIf { v -> v > 0L } ?: it.totalAmountToman }
+            val y = ym / 100
+            val m = (ym % 100).coerceIn(1, 12)
+            MonthlyReportBarPoint(
+                yearMonthKey = ym,
+                shortMonthName = JalaliCalendarUtils.jalaliMonthName(m),
+                year = y,
+                incomeToman = inc,
+                expenseToman = exp,
+                netToman = inc - exp
+            )
+        }
     }
 }
 
@@ -1823,7 +2126,24 @@ object OrosiVoiceSmsMatcher {
             }
         }
 
-        // Pass 2: 1-to-1 approximate auto-match for items marked isApproximateAmount (e.g. "یک و صد و خورده‌ای" -> 1,161,741)
+        fun approxBoundsFor(base: Long): Pair<Long, Long> {
+            // Colloquial Persian "و خورده‌ای":
+            // - "یک و خورده‌ای" (1,000,000) covers up to ~1,450,000 (e.g. 1,161,741)
+            // - "۲۰۰ و خورده‌ای" / "۹۰۰ و خورده‌ای" covers the full hundred-thousand band [base .. base + 99,999]
+            // - Compound "یک و صد و خورده‌ای" (1,100,000) covers +150k or +15%
+            val upperExtra = when {
+                base >= 1_000_000L && base % 1_000_000L == 0L ->
+                    kotlin.math.max(450_000L, (base * 0.35).toLong())
+                base in 100_000L..999_999L && base % 100_000L == 0L ->
+                    99_999L
+                else ->
+                    kotlin.math.max(150_000L, (base * 0.15).toLong())
+            }
+            val symmetricDelta = kotlin.math.max(100_000L, (base * 0.12).toLong())
+            return upperExtra to symmetricDelta
+        }
+
+        // Pass 2A: 1-to-1 approximate auto-match inside active window (36h default / 7d vague-past)
         for (i in items.indices) {
             if (results[i].matchedCandidate != null) continue
             val item = items[i]
@@ -1833,8 +2153,7 @@ object OrosiVoiceSmsMatcher {
             if (pool.isEmpty()) continue
 
             val base = item.totalAmountToman
-            val upperExtra = kotlin.math.max(150_000L, (base * 0.15).toLong())
-            val symmetricDelta = kotlin.math.max(100_000L, (base * 0.12).toLong())
+            val (upperExtra, symmetricDelta) = approxBoundsFor(base)
             val approxCandidates = pool.filter { cand ->
                 val diff = cand.amountToman - base
                 (diff in 0L..upperExtra) || (kotlin.math.abs(diff) <= symmetricDelta)
@@ -1855,25 +2174,62 @@ object OrosiVoiceSmsMatcher {
             }
         }
 
+        // Pass 2B (v2.9): For dateless approximate utterances (e.g. "من ۲۰۰ و خورده‌ای دریافت کردم از باسلام")
+        // where 36h had no match, auto-link ONLY if there is a strictly UNIQUE unclaimed same-direction
+        // approximate bank SMS within the last 7 days (e.g. yesterday's 30 Aban +278,694 SMS at 43h old).
+        for (i in items.indices) {
+            if (results[i].matchedCandidate != null) continue
+            if (!itemUsesRollingWindow[i] || items[i].isVagueRecentPast) continue
+            val item = items[i]
+            if (item.isCommitment || item.totalAmountToman <= 0L || !item.isApproximateAmount) continue
+
+            val base = item.totalAmountToman
+            val (upperExtra, symmetricDelta) = approxBoundsFor(base)
+            val approxIn7Days = sortedCandidates.filter { cand ->
+                cand.id !in claimedIds &&
+                    cand.isIncome == item.isIncome &&
+                    (nowMillis - cand.timestamp) in 0L..VAGUE_RECENT_PAST_WINDOW_MS &&
+                    run {
+                        val diff = cand.amountToman - base
+                        (diff in 0L..upperExtra) || (kotlin.math.abs(diff) <= symmetricDelta)
+                    }
+            }
+            if (approxIn7Days.size == 1) {
+                val uniqueApprox = approxIn7Days.first()
+                claimedIds.add(uniqueApprox.id)
+                results[i] = VoiceSmsMatchResult(
+                    matchedCandidate = uniqueApprox,
+                    suggestedCandidate = null,
+                    isExactAutoMatch = false,
+                    isApproximateAutoMatch = true
+                )
+            }
+        }
+
         // Pass 3: Closest unclaimed eligible same-direction suggestion for remaining non-commitment items
-        // (including ambiguous multi-match exact-amount candidates in the 7-day window).
+        // (including ambiguous multi-match exact or approximate candidates in the 7-day window).
         for (i in items.indices) {
             if (results[i].matchedCandidate != null) continue
             val item = items[i]
             if (item.isCommitment || item.totalAmountToman <= 0L) continue
             val targetDate = itemTargetDates[i]
             val pool = eligiblePoolFor(i)
-            val fallbackExact7Day = if (itemUsesRollingWindow[i] && !item.isVagueRecentPast) {
+            val fallback7Day = if (itemUsesRollingWindow[i] && !item.isVagueRecentPast) {
+                val base = item.totalAmountToman
+                val (upperExtra, symmetricDelta) = approxBoundsFor(base)
                 sortedCandidates.filter { cand ->
                     cand.id !in claimedIds &&
                         cand.isIncome == item.isIncome &&
-                        cand.amountToman == item.totalAmountToman &&
-                        (nowMillis - cand.timestamp) in 0L..VAGUE_RECENT_PAST_WINDOW_MS
+                        (nowMillis - cand.timestamp) in 0L..VAGUE_RECENT_PAST_WINDOW_MS &&
+                        (cand.amountToman == base || (item.isApproximateAmount && run {
+                            val diff = cand.amountToman - base
+                            (diff in 0L..upperExtra) || (kotlin.math.abs(diff) <= symmetricDelta)
+                        }))
                 }
             } else {
                 emptyList()
             }
-            val effectivePool = if (pool.isNotEmpty()) pool else fallbackExact7Day
+            val effectivePool = if (pool.isNotEmpty()) pool else fallback7Day
             if (effectivePool.isEmpty()) continue
 
             val sameDayPool = if (item.isVagueRecentPast) emptyList() else effectivePool.filter { it.jalaliDate == targetDate }
@@ -2995,8 +3351,35 @@ object PersianVoiceSlangParserEngine {
      * - When a clause contains multiple currency amounts, takes the LARGEST explicit currency amount in that clause.
      * - Disambiguates colloquial Iranian `"تومن"` scale for macro categories (`حقوق`, `اجاره`, `رهن`, `ماشین`, `خانه`, `قسط‌های بزرگ`).
      */
+    private val hybridDigitHundredsRegex = Regex(
+        """(?<=^|\s)([۱-۹1-9])\s+صد(?=\s|$|،)"""
+    )
+
+    private val spacedBasalamBrandRegex = Regex(
+        """(?<=^|\s)(از|به|برای|بابتِ|بابت|توی|تو|در|سایت|فروشگاه|اپ|غرفه|خرید|فروش|سفارش|واریز|تسویه)\s+با\s+سلام(?=\s|$|،)"""
+    )
+
+    /**
+     * Normalizes common Persian Google STT spacing artifacts before numeric & title parsing:
+     * 1. Hybrid digit+hundreds (`"۹ صد"` -> `"۹۰۰"`, `"۲ صد"` -> `"۲۰۰"`).
+     * 2. Marketplace brand `"باسلام"` split by Google STT as `"با سلام"` after prepositions
+     *    (`"از با سلام"` -> `"از باسلام"`), protecting it from greeting stripping while preserving
+     *    sentence-initial `"سلام ..."` greetings.
+     */
+    internal fun normalizeColloquialSttArtifacts(rawText: String): String {
+        val norm = PersianNumberUtils.normalizePersianText(rawText)
+        val mergedHundreds = hybridDigitHundredsRegex.replace(norm) { m ->
+            val d = PersianNumberUtils.toEnglishDigits(m.groupValues[1]).toIntOrNull() ?: return@replace m.value
+            PersianNumberUtils.toPersianDigits((d * 100).toString())
+        }
+        return spacedBasalamBrandRegex.replace(mergedHundreds) { m ->
+            "${m.groupValues[1]} باسلام"
+        }
+    }
+
     fun parseSpokenPersianAmountToman(rawText: String): Long {
-        val dateStripped = extractExplicitJalaliDate(rawText).second
+        val sttNormalized = normalizeColloquialSttArtifacts(rawText)
+        val dateStripped = extractExplicitJalaliDate(sttNormalized).second
         val cleaned = stripStumbledNumbers(PersianNumberUtils.normalizePersianText(dateStripped.trim()))
         if (cleaned.isBlank()) return 0L
 
@@ -4163,10 +4546,11 @@ object PersianVoiceSlangParserEngine {
         defaultBankName: String = "نقدی / دستی"
     ): ParsedVoiceExpense {
         val isTaggingExistingSms = fallbackTotalToman != null && fallbackTotalToman > 0L
+        val sttNormalizedSpeech = normalizeColloquialSttArtifacts(rawSpeech)
         val (extractedExplicitDate, speechWithoutExplicitDate) = if (isTaggingExistingSms) {
-            "" to rawSpeech
+            "" to sttNormalizedSpeech
         } else {
-            extractExplicitJalaliDate(rawSpeech)
+            extractExplicitJalaliDate(sttNormalizedSpeech)
         }
         val cleaned = pivotNarrativeIntroKeepingAmountInternal(
             stripStumbledNumbers(PersianNumberUtils.normalizePersianText(speechWithoutExplicitDate.trim()))
@@ -4322,10 +4706,16 @@ object PersianVoiceSlangParserEngine {
         exactPhraseAmounts.forEach { (phrase, _) ->
             corePhrase = corePhrase.replace(phrase, " ")
         }
-        // Strip colloquial compound million shorthands ("یک و صد و خورده‌ای", "دو و پونصد", "۱ و ۲۰۰") & approximate words
+        // Strip colloquial compound million shorthands ("یک و صد و خورده‌ای", "دو و پونصد", "۱ و ۲۰۰"),
+        // bare lead numbers before "و خورده‌ای" ("یک و خورده‌ای", "۹۰۰ و خورده‌ای"), and approximate words
+        val numberWordsPatternEarly = numberWordTokens.keys.sortedByDescending { it.length }.joinToString("|")
         corePhrase = colloquialCompoundMillionRegex.replace(corePhrase) { m ->
             if (isPrecededByEntityAttributeKeyword(corePhrase, m.range.first)) m.value else " "
         }
+        corePhrase = corePhrase.replace(
+            Regex("""(?<=^|\s)(?:(?:$numberWordsPatternEarly)|[۰-۹0-9]+)\s+(?:و\s+)?(?:خورده‌ای|خوردهای|خورده\s+ای|خرده‌ای|خرده\s+ای|خورده)(?=\s|$|،)"""),
+            " "
+        )
         corePhrase = corePhrase.replace(approximateAmountSpeechRegex, " ")
 
         // Strip numeric digits (outside ⟪QTY...⟫ placeholders):

@@ -17,7 +17,7 @@
 
 # Keep Android entry points & BroadcastReceivers
 -keep public class com.example.MainActivity { *; }
--keep public class com.example.data.sms.BankSmsBroadcastReceiver { *; }
+-keep public class com.example.receiver.BankSmsBroadcastReceiver { *; }
 
 # Keep Room Database, DAOs, Entities, and KSP-generated *_Impl classes
 -keep class * extends androidx.room.RoomDatabase

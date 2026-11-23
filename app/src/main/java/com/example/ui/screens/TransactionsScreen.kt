@@ -115,13 +115,36 @@ private data class LedgerTxRowUi(
     val isLongTitle: Boolean
 )
 
-@Immutable
-private data class DayTransactionGroup(
-    val dateSortKey: Int,
-    val dateHeaderLabel: String,
-    val dayNetSumToman: Long,
-    val formattedDayNetRun: String,
-    val rows: List<LedgerTxRowUi>
+private sealed interface LedgerListEntry {
+    val stableKey: String
+    val typeKey: String
+
+    @Immutable
+    data class DayHeader(
+        val dateSortKey: Int,
+        val dateHeaderLabel: String,
+        val dayNetSumToman: Long,
+        val formattedDayNetRun: String,
+        val netColor: Color,
+        val netUnitColor: Color
+    ) : LedgerListEntry {
+        override val stableKey: String = "header_$dateSortKey"
+        override val typeKey: String = "day_header"
+    }
+
+    @Immutable
+    data class TxItem(
+        val row: LedgerTxRowUi
+    ) : LedgerListEntry {
+        override val stableKey: String = "month_tx_${row.transaction.id}"
+        override val typeKey: String = "ledger_tx_card"
+    }
+}
+
+private data class MonthLedgerBundle(
+    val monthlyIncomeToman: Long,
+    val monthlyExpenseToman: Long,
+    val entries: List<LedgerListEntry>
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -152,8 +175,10 @@ fun TransactionsScreen(
     val monthName = jalaliMonthNames[selectedMonth - 1]
     val monthHeaderLabel = "$monthName ${PersianNumberUtils.toPersianDigits(selectedYear.toString())}"
 
-    val filteredTransactions = remember(transactions, selectedYear, selectedMonth) {
-        transactions
+    // Single-pass remember computing totals + flattened LazyColumn entries (day headers + rows)
+    // Eliminates nested forEach item/items slot-table overhead during 120Hz fast-scroll.
+    val monthLedger = remember(transactions, selectedYear, selectedMonth) {
+        val filtered = transactions
             .filter { tx ->
                 tx.totalAmountToman > 0L &&
                     tx.jalaliYear == selectedYear &&
@@ -163,95 +188,120 @@ fun TransactionsScreen(
                 compareByDescending<TransactionEntity> { it.timestampMillis }
                     .thenByDescending { it.id }
             )
-    }
 
-    val monthlyIncomeToman = remember(filteredTransactions) {
-        filteredTransactions.filter { it.type == "INCOME" }.sumOf { it.totalAmountToman }
-    }
-    val monthlyExpenseToman = remember(filteredTransactions) {
-        filteredTransactions.filter { it.type == "EXPENSE" }.sumOf { it.totalAmountToman }
-    }
+        var incomeSum = 0L
+        var expenseSum = 0L
+        filtered.forEach { tx ->
+            if (tx.type == "INCOME") incomeSum += tx.totalAmountToman
+            else if (tx.type == "EXPENSE") expenseSum += tx.totalAmountToman
+        }
 
-    // Group strictly after sorting by timestampMillis DESC so date headers are chronological newest -> oldest.
-    // Every transaction renders as its own independent minimalist card matching AccountsScreen for 120Hz fluidity.
-    val sortedDayGroups = remember(filteredTransactions) {
-        filteredTransactions
+        val dayBuckets = filtered
             .groupBy { it.jalaliDate }
             .entries
             .map { (dateHeaderLabel, dayTxs) ->
-                val sortedDayTxs = dayTxs.sortedWith(
-                    compareByDescending<TransactionEntity> { it.timestampMillis }
-                        .thenByDescending { it.id }
-                )
-                val firstTx = sortedDayTxs.first()
+                val firstTx = dayTxs.first()
                 val sortKey = firstTx.jalaliYear * 10000 + firstTx.jalaliMonth * 100 + firstTx.jalaliDay
-                val netSum = sortedDayTxs.sumOf { tx ->
-                    if (tx.type == "INCOME") tx.totalAmountToman else -tx.totalAmountToman
-                }
-                val rowModels = sortedDayTxs.map { tx ->
-                    val isIncome = tx.type == "INCOME"
-                    val shortBank = tx.shortBankName
-                    val hasCustomNote = !tx.isUntagged &&
-                        tx.purpose.isNotBlank() &&
-                        tx.purpose != "نیازمند تکمیل صوتی" &&
-                        tx.purpose != "برداشت کارتی / خرید" &&
-                        tx.purpose != "افزایش موجودی حساب" &&
-                        tx.purpose != "واریز به حساب"
-                    val primaryTitle = when {
-                        hasCustomNote -> tx.title.ifBlank { tx.displayTitle }
-                        tx.isUntagged -> if (isIncome) "واریز به کارت ($shortBank)" else "خرید کارتی ($shortBank)"
-                        else -> tx.title.ifBlank { tx.displayTitle }
-                    }
-                    val dispAmt = tx.userShareToman.takeIf { it > 0L } ?: tx.totalAmountToman
-                    val amountColor = when (tx.type) {
-                        "INCOME" -> NishapurTurquoiseSoft
-                        "GOLD_SAVE" -> SaffronGoldLight
-                        "SELF_TRANSFER" -> OrosiOnSurfaceVariant
-                        else -> RubyRoseSoft
-                    }
-                    val uColor = when (tx.type) {
-                        "INCOME" -> TxUnitIncomeColor
-                        "GOLD_SAVE" -> SaffronGoldLight.copy(alpha = 0.80f)
-                        "SELF_TRANSFER" -> TxUnitMutedColor
-                        else -> TxUnitExpenseColor
-                    }
-                    val barColor = when (tx.type) {
-                        "INCOME" -> TxBarIncomeColor
-                        "GOLD_SAVE" -> TxBarGoldColor
-                        "SELF_TRANSFER" -> TxBarMutedColor
-                        else -> TxBarExpenseColor
-                    }
-                    LedgerTxRowUi(
-                        transaction = tx,
-                        shortBank = shortBank,
-                        logoKey = JibemanAssetLogoCache.resolveBankLogoKey(shortBank),
-                        metaLabel = if (tx.timeStr.isNotBlank()) "$shortBank • ${tx.timeStr}" else shortBank,
-                        isIncome = isIncome,
-                        accentColor = amountColor,
-                        unitColor = uColor,
-                        edgeBarColor = barColor,
-                        displayAmountToman = dispAmt,
-                        formattedAmountRun = PersianNumberUtils.formatIsolatedAmountRun(dispAmt, isIncome),
-                        hasCustomNote = hasCustomNote,
-                        primaryTitle = primaryTitle,
-                        isLongTitle = primaryTitle.length > 22
-                    )
-                }
-                DayTransactionGroup(
+                Pair(sortKey, Pair(dateHeaderLabel, dayTxs))
+            }
+            .sortedByDescending { it.first }
+
+        val flatEntries = ArrayList<LedgerListEntry>(filtered.size + dayBuckets.size)
+        for ((sortKey, pair) in dayBuckets) {
+            val (dateHeaderLabel, dayTxs) = pair
+            var netSum = 0L
+            for (tx in dayTxs) {
+                netSum += if (tx.type == "INCOME") tx.totalAmountToman else -tx.totalAmountToman
+            }
+            val dayNetColor = when {
+                netSum < 0L -> RubyRoseSoft
+                netSum > 0L -> NishapurTurquoiseSoft
+                else -> OrosiOnSurfaceVariant
+            }
+            val dayNetUnitColor = when {
+                netSum < 0L -> TxUnitExpenseColor
+                netSum > 0L -> TxUnitIncomeColor
+                else -> TxUnitMutedColor
+            }
+            flatEntries.add(
+                LedgerListEntry.DayHeader(
                     dateSortKey = sortKey,
                     dateHeaderLabel = dateHeaderLabel,
                     dayNetSumToman = netSum,
                     formattedDayNetRun = PersianNumberUtils.formatIsolatedAmountRun(kotlin.math.abs(netSum), netSum > 0L),
-                    rows = rowModels
+                    netColor = dayNetColor,
+                    netUnitColor = dayNetUnitColor
+                )
+            )
+            for (tx in dayTxs) {
+                val isIncome = tx.type == "INCOME"
+                val shortBank = tx.shortBankName
+                val hasCustomNote = !tx.isUntagged &&
+                    tx.purpose.isNotBlank() &&
+                    tx.purpose != "نیازمند تکمیل صوتی" &&
+                    tx.purpose != "برداشت کارتی / خرید" &&
+                    tx.purpose != "افزایش موجودی حساب" &&
+                    tx.purpose != "واریز به حساب"
+                val primaryTitle = when {
+                    hasCustomNote -> tx.title.ifBlank { tx.displayTitle }
+                    tx.isUntagged -> if (isIncome) "واریز به کارت ($shortBank)" else "خرید کارتی ($shortBank)"
+                    else -> tx.title.ifBlank { tx.displayTitle }
+                }
+                val dispAmt = tx.userShareToman.takeIf { it > 0L } ?: tx.totalAmountToman
+                val amountColor = when (tx.type) {
+                    "INCOME" -> NishapurTurquoiseSoft
+                    "GOLD_SAVE" -> SaffronGoldLight
+                    "SELF_TRANSFER" -> OrosiOnSurfaceVariant
+                    else -> RubyRoseSoft
+                }
+                val uColor = when (tx.type) {
+                    "INCOME" -> TxUnitIncomeColor
+                    "GOLD_SAVE" -> SaffronGoldLight.copy(alpha = 0.80f)
+                    "SELF_TRANSFER" -> TxUnitMutedColor
+                    else -> TxUnitExpenseColor
+                }
+                val barColor = when (tx.type) {
+                    "INCOME" -> TxBarIncomeColor
+                    "GOLD_SAVE" -> TxBarGoldColor
+                    "SELF_TRANSFER" -> TxBarMutedColor
+                    else -> TxBarExpenseColor
+                }
+                flatEntries.add(
+                    LedgerListEntry.TxItem(
+                        LedgerTxRowUi(
+                            transaction = tx,
+                            shortBank = shortBank,
+                            logoKey = JibemanAssetLogoCache.resolveBankLogoKey(shortBank),
+                            metaLabel = if (tx.timeStr.isNotBlank()) "$shortBank • ${tx.timeStr}" else shortBank,
+                            isIncome = isIncome,
+                            accentColor = amountColor,
+                            unitColor = uColor,
+                            edgeBarColor = barColor,
+                            displayAmountToman = dispAmt,
+                            formattedAmountRun = PersianNumberUtils.formatIsolatedAmountRun(dispAmt, isIncome),
+                            hasCustomNote = hasCustomNote,
+                            primaryTitle = primaryTitle,
+                            isLongTitle = primaryTitle.length > 22
+                        )
+                    )
                 )
             }
-            .sortedByDescending { it.dateSortKey }
+        }
+        MonthLedgerBundle(
+            monthlyIncomeToman = incomeSum,
+            monthlyExpenseToman = expenseSum,
+            entries = flatEntries
+        )
     }
+
+    val monthlyIncomeToman = monthLedger.monthlyIncomeToman
+    val monthlyExpenseToman = monthLedger.monthlyExpenseToman
+    val flatLedgerEntries = monthLedger.entries
 
     var activeDeleteConfirmId by remember { mutableStateOf<Long?>(null) }
     val onRowLongClickForId = remember { { id: Long -> activeDeleteConfirmId = id } }
     val onClearDeleteConfirm = remember { { _: Long -> activeDeleteConfirmId = null } }
-    val shimmerBrush = if (isLoadingSelectedMonth) orosiShimmerBrush() else null
+    val shimmerOffset = if (isLoadingSelectedMonth) rememberOrosiShimmerOffset() else null
 
     LazyColumn(
         modifier = modifier
@@ -271,18 +321,18 @@ fun TransactionsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    contentAlignment = Alignment.Center,
+                IconButton(
+                    onClick = { onChangeMonth(-1) },
                     modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(OrosiSurfaceHigh)
+                        .size(48.dp)
+                        .testTag("prev_month_button")
                 ) {
-                    IconButton(
-                        onClick = { onChangeMonth(-1) },
+                    Box(
+                        contentAlignment = Alignment.Center,
                         modifier = Modifier
-                            .fillMaxSize()
-                            .testTag("prev_month_button")
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(OrosiSurfaceHigh)
                     ) {
                         Icon(
                             imageVector = Icons.Default.ChevronRight,
@@ -300,7 +350,7 @@ fun TransactionsScreen(
                         .clip(TxBarPillShape)
                         .background(OrosiSurfaceHigh.copy(alpha = 0.72f))
                         .clickable { showMonthPickerSheet = true }
-                        .padding(horizontal = 14.dp, vertical = 7.dp)
+                        .padding(horizontal = 14.dp, vertical = 9.dp)
                         .testTag("open_month_picker_button")
                 ) {
                     Text(
@@ -320,21 +370,21 @@ fun TransactionsScreen(
                     )
                 }
 
-                Box(
-                    contentAlignment = Alignment.Center,
+                IconButton(
+                    onClick = { if (canGoNextMonth) onChangeMonth(1) },
+                    enabled = canGoNextMonth,
                     modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (canGoNextMonth) OrosiSurfaceHigh else OrosiSurfaceHigh.copy(alpha = 0.35f)
-                        )
+                        .size(48.dp)
+                        .testTag("next_month_button")
                 ) {
-                    IconButton(
-                        onClick = { if (canGoNextMonth) onChangeMonth(1) },
-                        enabled = canGoNextMonth,
+                    Box(
+                        contentAlignment = Alignment.Center,
                         modifier = Modifier
-                            .fillMaxSize()
-                            .testTag("next_month_button")
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (canGoNextMonth) OrosiSurfaceHigh else OrosiSurfaceHigh.copy(alpha = 0.35f)
+                            )
                     ) {
                         Icon(
                             imageVector = Icons.Default.ChevronLeft,
@@ -457,7 +507,7 @@ fun TransactionsScreen(
             }
         }
 
-        if (isLoadingSelectedMonth && shimmerBrush != null) {
+        if (isLoadingSelectedMonth && shimmerOffset != null) {
             item(key = "month_loading_banner", contentType = "loading_banner") {
                 Column(
                     modifier = Modifier
@@ -484,9 +534,11 @@ fun TransactionsScreen(
                 }
             }
             items(4, key = { "month_shimmer_row_$it" }, contentType = { "shimmer_row" }) {
-                TransactionRowSkeletonShimmer(shimmerBrush = shimmerBrush)
+                if (shimmerOffset != null) {
+                    TransactionRowSkeletonShimmer(shimmerOffset = shimmerOffset)
+                }
             }
-        } else if (sortedDayGroups.isEmpty()) {
+        } else if (flatLedgerEntries.isEmpty()) {
             item(key = "empty_month_card", contentType = "empty_state") {
                 Spacer(modifier = Modifier.height(6.dp))
                 Column(
@@ -537,81 +589,72 @@ fun TransactionsScreen(
                 }
             }
         } else {
-            // 3. Independent Minimalist Transaction Cards matching AccountsScreen aesthetic
-            sortedDayGroups.forEach { dayGroup ->
-                item(key = "header_${dayGroup.dateSortKey}", contentType = "day_header") {
-                    val dayNetColor = when {
-                        dayGroup.dayNetSumToman < 0L -> RubyRoseSoft
-                        dayGroup.dayNetSumToman > 0L -> NishapurTurquoiseSoft
-                        else -> OrosiOnSurfaceVariant
-                    }
-                    val dayNetUnitColor = when {
-                        dayGroup.dayNetSumToman < 0L -> TxUnitExpenseColor
-                        dayGroup.dayNetSumToman > 0L -> TxUnitIncomeColor
-                        else -> TxUnitMutedColor
-                    }
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp, bottom = 0.dp, start = 4.dp, end = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = dayGroup.dateHeaderLabel,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 13.5.sp,
-                            color = PersianLapisLight
-                        )
-                        OrosiAmountText(
-                            amountToman = kotlin.math.abs(dayGroup.dayNetSumToman),
-                            color = dayNetColor,
-                            numberStyle = MaterialTheme.typography.labelLarge,
-                            numberFontWeight = FontWeight.Bold,
-                            unitStyle = MaterialTheme.typography.labelSmall,
-                            unitColor = dayNetUnitColor,
-                            isIncome = dayGroup.dayNetSumToman > 0L,
-                            hideAmount = hideAmounts,
-                            prefixText = if (!hideAmounts && dayGroup.dayNetSumToman < 0L) "خالص" else null,
-                            preformattedNumberRun = dayGroup.formattedDayNetRun,
-                            modifier = Modifier.testTag("day_net_sum_${dayGroup.dateSortKey}")
-                        )
-                    }
-                }
-
-                items(
-                    items = dayGroup.rows,
-                    key = { row -> "month_tx_${row.transaction.id}" },
-                    contentType = { "ledger_tx_card" }
-                ) { row ->
-                    val tx = row.transaction
-                    if (activeDeleteConfirmId == tx.id) {
-                        InlineDeleteConfirmOverlayBox(
-                            transactionId = tx.id,
-                            onConfirmDelete = {
-                                activeDeleteConfirmId = null
-                                onDeleteTransaction(tx)
-                            },
-                            onCancel = { activeDeleteConfirmId = null }
+            // 3. Single flat LazyColumn items() pass for silky 120Hz fast-scrolling across 100+ transactions
+            items(
+                items = flatLedgerEntries,
+                key = { it.stableKey },
+                contentType = { it.typeKey }
+            ) { entry ->
+                when (entry) {
+                    is LedgerListEntry.DayHeader -> {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp, bottom = 0.dp, start = 4.dp, end = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
+                            Text(
+                                text = entry.dateHeaderLabel,
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 13.5.sp,
+                                color = PersianLapisLight
+                            )
+                            OrosiAmountText(
+                                amountToman = kotlin.math.abs(entry.dayNetSumToman),
+                                color = entry.netColor,
+                                numberStyle = MaterialTheme.typography.labelLarge,
+                                numberFontWeight = FontWeight.Bold,
+                                unitStyle = MaterialTheme.typography.labelSmall,
+                                unitColor = entry.netUnitColor,
+                                isIncome = entry.dayNetSumToman > 0L,
+                                hideAmount = hideAmounts,
+                                prefixText = if (!hideAmounts && entry.dayNetSumToman < 0L) "خالص" else null,
+                                preformattedNumberRun = entry.formattedDayNetRun,
+                                modifier = Modifier.testTag("day_net_sum_${entry.dateSortKey}")
+                            )
+                        }
+                    }
+                    is LedgerListEntry.TxItem -> {
+                        val row = entry.row
+                        val tx = row.transaction
+                        if (activeDeleteConfirmId == tx.id) {
+                            InlineDeleteConfirmOverlayBox(
+                                transactionId = tx.id,
+                                onConfirmDelete = {
+                                    activeDeleteConfirmId = null
+                                    onDeleteTransaction(tx)
+                                },
+                                onCancel = { activeDeleteConfirmId = null }
+                            ) {
+                                MinimalLedgerTransactionCard(
+                                    row = row,
+                                    hideAmounts = hideAmounts,
+                                    onTransactionClick = onTransactionClick,
+                                    onRowLongClickId = onClearDeleteConfirm,
+                                    onUntaggedMicClick = onUntaggedMicClick
+                                )
+                            }
+                        } else {
                             MinimalLedgerTransactionCard(
                                 row = row,
                                 hideAmounts = hideAmounts,
                                 onTransactionClick = onTransactionClick,
-                                onRowLongClickId = onClearDeleteConfirm,
+                                onRowLongClickId = onRowLongClickForId,
                                 onUntaggedMicClick = onUntaggedMicClick
                             )
                         }
-                    } else {
-                        MinimalLedgerTransactionCard(
-                            row = row,
-                            hideAmounts = hideAmounts,
-                            onTransactionClick = onTransactionClick,
-                            onRowLongClickId = onRowLongClickForId,
-                            onUntaggedMicClick = onUntaggedMicClick
-                        )
                     }
                 }
             }

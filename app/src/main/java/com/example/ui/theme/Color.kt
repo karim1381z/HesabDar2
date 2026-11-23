@@ -56,3 +56,9 @@ val OrosiOutline = Color(0xFF928F9A)
 val OrosiOutlineVariant = Color(0xFF47464F)
 val OrosiGlassBorder = Color(0x24FFFFFF)
 val OrosiHairline = Color(0x14FFFFFF)
+
+// Elevated Tonal Sheet & Banner Tokens
+val OrosiDeepTealTint = Color(0xFF112936)
+val OrosiBalanceIncomeCardBg = Color(0xFF133A42)
+val OrosiBalanceExpenseCardBg = Color(0xFF391F2E)
+val OrosiBalanceDailyCardBg = Color(0xFF1D3550)

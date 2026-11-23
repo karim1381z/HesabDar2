@@ -1498,6 +1498,73 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun testOrosiV29VoiceSttKhordeEiCycleCommitmentsAndMonthlyReports() {
+        // 1. STT "۹ صد و خورده‌ای از با سلام دریافت کردم" -> 900,000 + "باسلام"
+        val nineHundred = PersianVoiceSlangParserEngine.parseVoiceCommand(
+            "من ۹ صد و خورده‌ای از با سلام دریافت کردم"
+        )
+        assertEquals(900_000L, nineHundred.totalAmountToman)
+        assertEquals(true, nineHundred.isIncome)
+        assertEquals(true, nineHundred.isApproximateAmount)
+        assertEquals("باسلام", nineHundred.purposeCategory)
+        assertEquals(null, nineHundred.commitmentKind)
+
+        // 2. "چند روز پیش یک و خورده‌ای از با سلام اومد به حسابم" -> title "باسلام" + matches +1,161,741
+        val oneAndChange = PersianVoiceSlangParserEngine.parseVoiceCommand(
+            "چند روز پیش یک و خورده‌ای از با سلام اومد به حسابم"
+        )
+        assertEquals(1_000_000L, oneAndChange.totalAmountToman)
+        assertEquals("باسلام", oneAndChange.purposeCategory)
+        assertEquals(true, oneAndChange.isIncome)
+        assertEquals(true, oneAndChange.isApproximateAmount)
+        assertEquals(true, oneAndChange.isVagueRecentPast)
+
+        val azar2Ts = JalaliCalendarUtils.jalaliDayStartMillis(1405, 9, 2) + 5L * 3_600_000L + 36L * 60_000L
+        val sms3dTs = azar2Ts - 70L * 3_600_000L
+        val sms3dJ = JalaliCalendarUtils.fromTimestamp(sms3dTs)
+        val match1M = OrosiVoiceSmsMatcher.matchBatch(
+            items = listOf(oneAndChange),
+            untaggedBankSms = listOf(
+                UntaggedSmsCandidate(991L, "بلو", 1_161_741L, true, sms3dTs, sms3dJ.dateWithYear, sms3dJ.timeStr, "کارت بلو")
+            ),
+            nowMillis = azar2Ts
+        ).first()
+        assertEquals(true, match1M.isApproximateAutoMatch)
+        assertEquals(991L, match1M.matchedCandidate?.id)
+
+        // 3. "من ۲۰۰ و خورده‌ای دریافت کردم از باسلام" -> Pass 2B 7-day unique approx links 43h-old +278,694
+        val twoHundred = PersianVoiceSlangParserEngine.parseVoiceCommand(
+            "من ۲۰۰ و خورده‌ای دریافت کردم از باسلام"
+        )
+        assertEquals(200_000L, twoHundred.totalAmountToman)
+        assertEquals("باسلام", twoHundred.purposeCategory)
+        assertEquals(true, twoHundred.isIncome)
+        assertEquals(true, twoHundred.isApproximateAmount)
+
+        val sms43hTs = azar2Ts - 43L * 3_600_000L
+        val sms43hJ = JalaliCalendarUtils.fromTimestamp(sms43hTs)
+        val match200k = OrosiVoiceSmsMatcher.matchBatch(
+            items = listOf(twoHundred),
+            untaggedBankSms = listOf(
+                UntaggedSmsCandidate(992L, "بلو", 278_694L, true, sms43hTs, sms43hJ.dateWithYear, sms43hJ.timeStr, "کارت بلو")
+            ),
+            nowMillis = azar2Ts
+        ).first()
+        assertEquals(true, match200k.isApproximateAutoMatch)
+        assertEquals(992L, match200k.matchedCandidate?.id)
+
+        // 4. Past-cycle commitment scoping
+        assertEquals(true, OrosiCashflowAnalyzer.isCommitmentDueInCycle("۱۵ آبان ۱۴۰۵", 1, azar2Ts, -1))
+        assertEquals(false, OrosiCashflowAnalyzer.isCommitmentDueInCycle("۲۰ آذر ۱۴۰۵", 1, azar2Ts, -1))
+        assertEquals(false, OrosiCashflowAnalyzer.isCommitmentDueInCycle("۱ دی ۱۴۰۵", 1, azar2Ts, -1))
+
+        // 5. Smart bank tag hint examples adapt to amount scale
+        assertEquals(false, com.example.ui.components.smartBankTagExamples(1_951_673L, false).contains("پفک"))
+        assertEquals(true, com.example.ui.components.smartBankTagExamples(1_951_673L, false).contains("قسط"))
+        assertEquals(true, com.example.ui.components.smartBankTagExamples(15_000_000L, true).contains("حقوق"))
+    }
+
+    @Test
     fun testFullOrosiRegressionAndStressSuitePasses100Percent() {
         val report = com.example.domain.OrosiRegressionSuite.runFullRegressionAndStressSuite()
         for (r in report.results) {
@@ -1509,8 +1576,8 @@ class ExampleUnitTest {
         }
         assertEquals(true, report.allPassed)
         assertEquals(com.example.domain.OrosiRegressionSuite.EXPECTED_TOTAL_CASES, report.totalCount)
-        assertEquals(84, report.totalCount)
-        assertEquals(84, report.passedCount)
+        assertEquals(92, report.totalCount)
+        assertEquals(92, report.passedCount)
     }
 }
 

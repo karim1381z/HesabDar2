@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -170,10 +171,7 @@ fun OrosiFinanceApp(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-
-    LaunchedEffect(Unit) {
-        com.example.ui.components.JibemanAssetLogoCache.preloadAsync(context)
-    }
+    val isSyncingBackgroundMonths by viewModel.isSyncingBackgroundMonths.collectAsStateWithLifecycle()
 
     var hasSmsPermission by remember {
         mutableStateOf(
@@ -380,6 +378,10 @@ fun OrosiFinanceApp(
             val onSetTankhahModeEnabled = remember(viewModel) { { enabled: Boolean -> viewModel.setTankhahModeEnabled(enabled) } }
             val onAccountClick = remember(viewModel) { { account: com.example.data.local.BankAccountEntity -> viewModel.openAccountEditSheet(account) } }
             val onOpenAddAccountModal = remember(viewModel) { { viewModel.setShowAddBankAccountModal(true) } }
+            val onSelectCommitmentTab = remember(viewModel) { { tab: com.example.ui.CommitmentTab -> viewModel.selectCommitmentTab(tab) } }
+            val onCommitmentClick = remember(viewModel) { { c: com.example.data.local.CommitmentEntity -> viewModel.openCommitmentActionSheet(c) } }
+            val onOpenAddCommitmentModal = remember(viewModel) { { viewModel.setShowAddCommitmentModal(true) } }
+            val onEnsureMonthsSynced = remember(viewModel) { { keys: List<Int> -> viewModel.ensureJalaliMonthsSynced(keys) } }
             val onAddVoiceClick = remember(voicePermissionLauncher) {
                 {
                     voicePermissionLauncher.launch(
@@ -447,13 +449,15 @@ fun OrosiFinanceApp(
                     OrosiScreen.TOOLS -> {
                         CommitmentsScreen(
                             selectedTab = uiState.selectedCommitmentTab,
-                            onSelectTab = { viewModel.selectCommitmentTab(it) },
+                            onSelectTab = onSelectCommitmentTab,
                             commitments = uiState.commitments,
                             transactions = uiState.transactions,
                             hideAmounts = uiState.settings.hideAmounts,
-                            onCommitmentClick = { viewModel.openCommitmentActionSheet(it) },
-                            onOpenAddCommitmentModal = { viewModel.setShowAddCommitmentModal(true) },
-                            onBackToDashboard = { viewModel.navigateTo(OrosiScreen.HOME) }
+                            isSyncingReportMonths = isSyncingBackgroundMonths,
+                            onEnsureMonthsSynced = onEnsureMonthsSynced,
+                            onCommitmentClick = onCommitmentClick,
+                            onOpenAddCommitmentModal = onOpenAddCommitmentModal,
+                            onBackToDashboard = onBackToHome
                         )
                     }
                 }
@@ -505,10 +509,11 @@ fun OrosiFinanceApp(
         )
     }
 
-    // Effortless Voice Overlay Bottom Sheet
+    // Effortless Voice Overlay Bottom Sheet — collects isolated voiceState so root screens never recompose on speech ticks
     if (uiState.showVoiceOverlaySheet) {
+        val voiceState by viewModel.voiceState.collectAsStateWithLifecycle()
         VoiceOverlayBottomSheet(
-            voiceState = uiState.voiceState,
+            voiceState = voiceState,
             onSpeechChange = { viewModel.onVoiceSpeechChanged(it) },
             onManualAmountChange = { viewModel.onVoiceManualAmountChanged(it) },
             onPurposeChange = { viewModel.onVoicePurposeChanged(it) },
@@ -554,11 +559,15 @@ fun OrosiFinanceApp(
 
     // Hero Card Math & Monthly Balance Report Modal ("ترازنامه ماه حقوقی")
     if (uiState.showHeroMathSheet) {
+        val onEnsureCycleMonthsSynced = remember(viewModel) { { keys: List<Int> -> viewModel.ensureJalaliMonthsSynced(keys) } }
         HeroMathBreakdownBottomSheet(
             settings = uiState.settings,
             transactions = uiState.transactions,
             reservedCommitmentsToman = reservedCommitmentsToman,
             futureCommitmentsToman = futureCommitmentsToman,
+            commitments = uiState.commitments,
+            isSyncingCycleMonths = isSyncingBackgroundMonths,
+            onEnsureCycleMonthsSynced = onEnsureCycleMonthsSynced,
             onDismiss = { viewModel.setShowHeroMathSheet(false) }
         )
     }
@@ -643,11 +652,12 @@ private fun OrosiTopHeader(
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
+                .heightIn(min = 48.dp)
                 .clip(RoundedCornerShape(50))
                 .background(OrosiSurfaceContainer)
                 .border(1.dp, OrosiHairline, RoundedCornerShape(50))
                 .clickable(onClick = onProfileClick)
-                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .padding(horizontal = 12.dp, vertical = 7.dp)
                 .testTag("profile_settings_button")
         ) {
             Box(
