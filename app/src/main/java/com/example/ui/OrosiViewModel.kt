@@ -271,25 +271,47 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
         val currentYearMonthKey = JalaliCalendarUtils.fromTimestamp(System.currentTimeMillis()).yearMonthKey
         val current = _selectedYearMonthKey.value
         if (deltaMonths > 0 && current >= currentYearMonthKey) return
-        hasUserChangedMonthManually = true
         val candidateKey = JalaliCalendarUtils.shiftJalaliYearMonth(current, deltaMonths)
         val targetKey = if (deltaMonths > 0) {
             candidateKey.coerceAtMost(currentYearMonthKey)
         } else {
             candidateKey
         }
-        _selectedYearMonthKey.value = targetKey
+        selectJalaliMonth(targetKey)
+    }
 
-        if (!repository.isJalaliMonthSynced(targetKey)) {
+    fun selectJalaliMonth(yearMonthKey: Int) {
+        val currentYearMonthKey = JalaliCalendarUtils.fromTimestamp(System.currentTimeMillis()).yearMonthKey
+        val targetKey = yearMonthKey.coerceAtMost(currentYearMonthKey)
+        hasUserChangedMonthManually = true
+        _selectedYearMonthKey.value = targetKey
+        syncMonthIfNeeded(targetKey, force = false)
+    }
+
+    fun rescanSelectedMonth() {
+        val targetKey = _selectedYearMonthKey.value
+        syncMonthIfNeeded(targetKey, force = true)
+    }
+
+    private fun syncMonthIfNeeded(targetKey: Int, force: Boolean) {
+        if (force || !repository.isJalaliMonthSynced(targetKey)) {
             monthSyncJob?.cancel()
             monthSyncJob = viewModelScope.launch {
                 _loadingMonthKey.value = targetKey
                 val startMs = System.currentTimeMillis()
                 try {
-                    repository.syncTransactionsForJalaliMonth(appContext, targetKey)
+                    val imported = repository.syncTransactionsForJalaliMonth(appContext, targetKey, force = force)
                     val elapsed = System.currentTimeMillis() - startMs
                     if (elapsed < 260L) {
                         delay(260L - elapsed)
+                    }
+                    if (force) {
+                        val msg = if (imported > 0) {
+                            "${PersianNumberUtils.toPersianDigits(imported.toString())} پیامک بانکی برای این ماه بازیابی شد ✓"
+                        } else {
+                            "پیامک بانکی جدیدی در این ماه یافت نشد."
+                        }
+                        showBanner(msg)
                     }
                 } finally {
                     if (_loadingMonthKey.value == targetKey) {
@@ -907,9 +929,13 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
         if (index !in currentList.indices) return
         val existingItem = currentList[index]
         if (existingItem.isIncome == isIncome) return
+        val nextKind = existingItem.commitmentKind?.let { if (isIncome) "RECEIVABLE" else "DEBT" }
+        val nextCat = if (nextKind == "RECEIVABLE") "DONG" else existingItem.commitmentCategory
         currentList[index] = existingItem.copy(
             isIncome = isIncome,
-            commitmentKind = existingItem.commitmentKind?.let { if (isIncome) "RECEIVABLE" else "DEBT" }
+            commitmentKind = nextKind,
+            commitmentCategory = nextCat,
+            commitmentSubLabel = if (nextKind != null) commitmentSubLabelFor(nextCat, isIncome) else ""
         )
         val combinedNote = PersianVoiceSlangParserEngine.formatCombinedMultiVoiceNote(currentList)
         val multiMatches = if (_voiceState.value.targetUntaggedTransaction == null) {
@@ -1296,7 +1322,7 @@ class OrosiViewModel(application: Application) : AndroidViewModel(application) {
                 eventDayOffset = if (targetTx == null) (v.eventDayOffset.takeIf { it != 0 } ?: parsedFromSpeech.eventDayOffset) else 0,
                 commitmentSubLabel = if (effectiveCommitmentKind != null) v.commitmentSubLabel.ifBlank { parsedFromSpeech.commitmentSubLabel } else "",
                 isApproximateAmount = v.isApproximateAmount,
-                explicitJalaliDate = if (targetTx == null && effectiveCommitmentKind == null) {
+                explicitJalaliDate = if (targetTx == null) {
                     v.explicitJalaliDate.ifBlank { parsedFromSpeech.explicitJalaliDate }
                 } else {
                     ""

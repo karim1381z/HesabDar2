@@ -11,6 +11,7 @@ import com.example.data.local.TransactionEntity
 import com.example.domain.BankSmsParserEngine
 import com.example.domain.JalaliCalendarUtils
 import com.example.domain.JibemanSmsEngine
+import com.example.domain.OrosiCashflowAnalyzer
 import com.example.domain.ParsedSmsResult
 import com.example.domain.ParsedVoiceExpense
 import com.example.domain.PersianNumberUtils
@@ -197,12 +198,12 @@ class OrosiFinanceRepository(
 
     fun isJalaliMonthSynced(yearMonthKey: Int): Boolean {
         val prefs = getPrimaryPrefs() ?: return true
-        val synced = prefs.getStringSet("synced_jalali_months_v1", emptySet()) ?: emptySet()
+        val synced = prefs.getStringSet("synced_jalali_months_v2", emptySet()) ?: emptySet()
         return yearMonthKey.toString() in synced
     }
 
     private fun markJalaliMonthsSynced(prefs: android.content.SharedPreferences, monthKeys: Collection<Int>) {
-        val existing = prefs.getStringSet("synced_jalali_months_v1", emptySet())?.toMutableSet()
+        val existing = prefs.getStringSet("synced_jalali_months_v2", emptySet())?.toMutableSet()
             ?: mutableSetOf()
         var changed = false
         for (key in monthKeys) {
@@ -211,7 +212,7 @@ class OrosiFinanceRepository(
             }
         }
         if (changed) {
-            prefs.edit().putStringSet("synced_jalali_months_v1", existing).apply()
+            prefs.edit().putStringSet("synced_jalali_months_v2", existing).apply()
         }
     }
 
@@ -487,7 +488,14 @@ class OrosiFinanceRepository(
         val totalExpenses = nonDemoTxs.filter { it.type == "EXPENSE" }.sumOf { it.userShareToman }
 
         val unpaidCommitments = allCommitments
-            .filter { !it.isSettled && (it.category == "SAYYAD_ISSUED" || it.category == "LOAN_INSTALLMENT") }
+            .filter {
+                !it.isSettled &&
+                    (it.category == "SAYYAD_ISSUED" || it.category == "LOAN_INSTALLMENT") &&
+                    OrosiCashflowAnalyzer.isCommitmentDueInCurrentCycle(
+                        dueDateJalali = it.dueDateStr,
+                        paydayStartDay = currentSettings.paydayStartDay
+                    )
+            }
             .sumOf { it.amountToman }
 
         val rawAccountBalanceToman: Long = when {
@@ -647,7 +655,7 @@ class OrosiFinanceRepository(
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val hadRealSmsBefore = prefs.getBoolean("has_real_bank_sms", false)
             val cleanLedgerV15Done = prefs.getBoolean("jibeman_clean_ledger_v15", false)
-            val fullInboxBalancePassV2Done = prefs.getBoolean("full_inbox_balance_pass_v2", false)
+            val fullInboxBalancePassV3Done = prefs.getBoolean("full_inbox_balance_pass_v3", false)
             val lastMaxSmsTs = prefs.getLong("last_max_sms_ts_v2", 0L)
 
             val nowJalali = JalaliCalendarUtils.fromTimestamp(nowMs)
@@ -690,7 +698,7 @@ class OrosiFinanceRepository(
 
             val needFullPass = force ||
                 !cleanLedgerV15Done ||
-                !fullInboxBalancePassV2Done ||
+                !fullInboxBalancePassV3Done ||
                 existingAccountsBeforeScan.isEmpty() ||
                 lastMaxSmsTs <= 0L
 
@@ -783,7 +791,7 @@ class OrosiFinanceRepository(
                         prev.lastUpdatedTimestamp > effectiveTs
                     val canOverwritePrevBalance = prev == null ||
                         force ||
-                        !fullInboxBalancePassV2Done ||
+                        !fullInboxBalancePassV3Done ||
                         effectiveTs >= prev.lastUpdatedTimestamp
 
                     val resolvedBalance = when {
@@ -791,7 +799,7 @@ class OrosiFinanceRepository(
                         effectiveBal != null && canOverwritePrevBalance -> effectiveBal
                         else -> prev?.balanceToman ?: 0L
                     }
-                    val resolvedTs = if (force || !fullInboxBalancePassV2Done) {
+                    val resolvedTs = if (force || !fullInboxBalancePassV3Done) {
                         maxOf(effectiveTs, st.latestSeenTimestamp)
                     } else {
                         maxOf(effectiveTs, st.latestSeenTimestamp, prev?.lastUpdatedTimestamp ?: 0L)
@@ -1027,17 +1035,20 @@ class OrosiFinanceRepository(
                             val bankName = profile.nameFa
                             // Skip banks whose real balance was already captured in Query A!
                             if (discoveredBanks[bankName]?.latestRealBalanceToman != null) continue
+                            // Collect up to 64 newest IDs per dormant bank (metadata-only, still tiny!)
+                            // so banks with many non-transaction OTP/alert/promo SMS (e.g. Bank Melli)
+                            // can still recover their real transaction/balance SMS cleanly.
                             val bucket = historicalCandidateIdsByBank.getOrPut(bankName) { mutableListOf() }
-                            if (bucket.size < 8 && idIdx >= 0) {
+                            if (bucket.size < 64 && idIdx >= 0) {
                                 bucket.add(c.getLong(idIdx))
                             }
                         }
                     }
 
-                    // Query C: Fetch BODY ONLY for the few collected historical bank SMS IDs (~5-30 rows max!)
-                    val allHistoricalIds = historicalCandidateIdsByBank.values.flatten()
-                    if (allHistoricalIds.isNotEmpty()) {
-                        for (chunk in allHistoricalIds.chunked(200)) {
+                    // Query C (Pass 1): Fetch BODY for the newest 8 IDs per dormant bank
+                    suspend fun fetchHistoricalIdsBatch(ids: List<Long>) {
+                        if (ids.isEmpty()) return
+                        for (chunk in ids.chunked(200)) {
                             val idListSql = chunk.joinToString(",")
                             openInboxCursor(
                                 projection = fullProjection,
@@ -1062,6 +1073,24 @@ class OrosiFinanceRepository(
                                 }
                             }
                         }
+                    }
+
+                    val firstPassHistoricalIds = historicalCandidateIdsByBank.values.flatMap { it.take(8) }
+                    if (firstPassHistoricalIds.isNotEmpty()) {
+                        fetchHistoricalIdsBatch(firstPassHistoricalIds)
+                        flushDiscoveredAccountsToRoom()
+                    }
+
+                    // Query C (Pass 2 - Deep Dormant Recovery): For any bank that STILL has no extracted
+                    // balance (e.g. Bank Melli behind 10+ BAM OTP/security SMS), inspect its remaining IDs.
+                    val deepFallbackIds = historicalCandidateIdsByBank
+                        .filter { (bankName, ids) ->
+                            ids.size > 8 && discoveredBanks[bankName]?.effectiveBalanceToman == null
+                        }
+                        .values
+                        .flatMap { it.drop(8) }
+                    if (deepFallbackIds.isNotEmpty()) {
+                        fetchHistoricalIdsBatch(deepFallbackIds)
                         flushDiscoveredAccountsToRoom()
                     }
 
@@ -1069,6 +1098,7 @@ class OrosiFinanceRepository(
                     prefs.edit()
                         .putBoolean("full_inbox_balance_pass_v1", true)
                         .putBoolean("full_inbox_balance_pass_v2", true)
+                        .putBoolean("full_inbox_balance_pass_v3", true)
                         .apply()
                 }
 
@@ -1117,6 +1147,8 @@ class OrosiFinanceRepository(
             val (startMs, endMs) = JalaliCalendarUtils.jalaliMonthEpochRangeMillis(year, month)
 
             val existingAllTxs = dao.getAllTransactionsNow()
+            val hasAnyRoomTxInMonth = existingAllTxs.any { it.timestamp in startMs until endMs }
+            val allowEmptyMonthRecovery = force || !hasAnyRoomTxInMonth
             val existingRoomFingerprints = existingAllTxs
                 .filter { it.rawSmsBody.isNotBlank() }
                 .mapTo(mutableSetOf()) { "${it.bankName}|${it.totalAmountToman}|${it.timestamp}|${it.rawSmsBody.trim().hashCode()}" }
@@ -1126,6 +1158,7 @@ class OrosiFinanceRepository(
 
             val monthBatch = mutableListOf<TransactionEntity>()
             var importedCount = 0
+            var cursorOpened = false
 
             try {
                 val projection = arrayOf(
@@ -1153,6 +1186,7 @@ class OrosiFinanceRepository(
                 )
 
                 cursor?.use { c ->
+                    cursorOpened = true
                     val addrIdx = c.getColumnIndex(Telephony.Sms.ADDRESS)
                     val bodyIdx = c.getColumnIndex(Telephony.Sms.BODY)
                     val dateIdx = c.getColumnIndex(Telephony.Sms.DATE)
@@ -1176,7 +1210,12 @@ class OrosiFinanceRepository(
                         val isDeposit = (parsed.direction == "in")
                         val roomFingerprint = "$bankName|$amountToman|$timestampMillis|${body.trim().hashCode()}"
 
-                        if (!importedKeys.contains(uniqueDedupKey) && !existingRoomFingerprints.contains(roomFingerprint)) {
+                        val shouldImport = if (allowEmptyMonthRecovery) {
+                            !existingRoomFingerprints.contains(roomFingerprint)
+                        } else {
+                            !importedKeys.contains(uniqueDedupKey) && !existingRoomFingerprints.contains(roomFingerprint)
+                        }
+                        if (shouldImport) {
                             val fullResult = BankSmsParserEngine.parseWithJibemanEngine(
                                 senderAddress = senderAddress,
                                 body = body,
@@ -1213,7 +1252,9 @@ class OrosiFinanceRepository(
                 if (monthBatch.isNotEmpty()) {
                     dao.insertAllTransactions(monthBatch)
                 }
-                markJalaliMonthsSynced(prefs, listOf(yearMonthKey))
+                if (cursorOpened) {
+                    markJalaliMonthsSynced(prefs, listOf(yearMonthKey))
+                }
                 if (importedKeys.size != initialKeyCount) {
                     prefs.edit().putStringSet("jibeman_dedup_keys", importedKeys).apply()
                 }
@@ -1491,9 +1532,11 @@ class OrosiFinanceRepository(
                 .remove("card_balances_v4_json")
                 .remove("backup_snapshot_json")
                 .remove("synced_jalali_months_v1")
+                .remove("synced_jalali_months_v2")
                 .remove("last_max_sms_ts_v2")
                 .putBoolean("full_inbox_balance_pass_v1", false)
                 .putBoolean("full_inbox_balance_pass_v2", false)
+                .putBoolean("full_inbox_balance_pass_v3", false)
                 .putBoolean("has_real_bank_sms", false)
                 .apply()
             dao.clearAllTransactions()

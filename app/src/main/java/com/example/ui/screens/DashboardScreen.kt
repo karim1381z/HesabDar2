@@ -119,6 +119,10 @@ private val DashUnitIncomeColor = NishapurTurquoiseSoft.copy(alpha = 0.82f)
 private val DashUnitGoldColor = SaffronGoldLight.copy(alpha = 0.82f)
 private val DashUnitExpenseColor = RubyRoseSoft.copy(alpha = 0.82f)
 private val DashUnitMutedColor = OrosiOnSurfaceVariant.copy(alpha = 0.82f)
+private val DashBarIncomeColor = NishapurTurquoiseBright.copy(alpha = 0.78f)
+private val DashBarExpenseColor = RubyRoseSoft.copy(alpha = 0.72f)
+private val DashBarGoldColor = SaffronGoldLight.copy(alpha = 0.72f)
+private val DashBarMutedColor = OrosiOnSurfaceVariant.copy(alpha = 0.45f)
 private val DashHeaderVoiceBrush = Brush.horizontalGradient(
     colors = listOf(NishapurTurquoise, NishapurTurquoiseDeep)
 )
@@ -163,9 +167,16 @@ fun DashboardScreen(
     val nonTankhahBalance = remember(bankAccounts) {
         bankAccounts.filter { !it.isTankhah }.sumOf { it.balanceToman.coerceAtLeast(0L) }
     }
-    val unpaidCommitmentsToman = remember(commitments) {
+    val unpaidCommitmentsToman = remember(commitments, settings.paydayStartDay) {
         commitments
-            .filter { !it.isSettled && (it.category == "SAYYAD_ISSUED" || it.category == "LOAN_INSTALLMENT") }
+            .filter {
+                !it.isSettled &&
+                    (it.category == "SAYYAD_ISSUED" || it.category == "LOAN_INSTALLMENT") &&
+                    OrosiCashflowAnalyzer.isCommitmentDueInCurrentCycle(
+                        dueDateJalali = it.dueDateStr,
+                        paydayStartDay = settings.paydayStartDay
+                    )
+            }
             .sumOf { it.amountToman }
     }
     val tankhahBalance = remember(rawTankhahSum, unpaidCommitmentsToman) {
@@ -204,6 +215,12 @@ fun DashboardScreen(
                 "SELF_TRANSFER" -> DashUnitMutedColor
                 else -> DashUnitExpenseColor
             }
+            val barColor = when (tx.type) {
+                "INCOME" -> DashBarIncomeColor
+                "GOLD_SAVE" -> DashBarGoldColor
+                "SELF_TRANSFER" -> DashBarMutedColor
+                else -> DashBarExpenseColor
+            }
             DashTxRowUi(
                 transaction = tx,
                 shortBank = shortBank,
@@ -215,6 +232,7 @@ fun DashboardScreen(
                 isIncome = isIncome,
                 amountColor = color,
                 unitColor = uColor,
+                edgeBarColor = barColor,
                 isLongTitle = rowTitle.length > 22
             )
         }
@@ -1115,6 +1133,7 @@ private data class DashTxRowUi(
     val isIncome: Boolean,
     val amountColor: Color,
     val unitColor: Color,
+    val edgeBarColor: Color,
     val isLongTitle: Boolean
 )
 
@@ -1238,16 +1257,22 @@ private fun CalmTransactionCardFast(
                 onClick = { onTransactionClick(tx) },
                 onLongClick = if (onRowLongClickId != null) { { onRowLongClickId(tx.id) } } else null
             )
-            .padding(horizontal = 14.dp, vertical = 11.dp)
+            .padding(start = 10.dp, end = 14.dp, top = 11.dp, bottom = 11.dp)
             .testTag("transaction_item_${tx.id}"),
-        horizontalArrangement = Arrangement.spacedBy(11.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        Box(
+            modifier = Modifier
+                .width(3.5.dp)
+                .height(36.dp)
+                .background(row.edgeBarColor, DashPillShape50)
+        )
+
         com.example.ui.components.BankLogoAvatar(
             bankName = row.shortBank,
             size = 38.dp,
-            preResolvedLogoKey = row.logoKey,
-            directionIndicatorIsIncome = row.isIncome
+            preResolvedLogoKey = row.logoKey
         )
 
         Column(
@@ -1329,6 +1354,12 @@ fun CalmTransactionCard(
             "SELF_TRANSFER" -> DashUnitMutedColor
             else -> DashUnitExpenseColor
         }
+        val barColor = when (transaction.type) {
+            "INCOME" -> DashBarIncomeColor
+            "GOLD_SAVE" -> DashBarGoldColor
+            "SELF_TRANSFER" -> DashBarMutedColor
+            else -> DashBarExpenseColor
+        }
         DashTxRowUi(
             transaction = transaction,
             shortBank = shortBank,
@@ -1340,6 +1371,7 @@ fun CalmTransactionCard(
             isIncome = isIncome,
             amountColor = color,
             unitColor = uColor,
+            edgeBarColor = barColor,
             isLongTitle = rowTitle.length > 22
         )
     }

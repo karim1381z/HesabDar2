@@ -291,9 +291,28 @@ fun OrosiFinanceApp(
         }
     }
 
-    val reservedCommitmentsToman = remember(uiState.commitments) {
+    val reservedCommitmentsToman = remember(uiState.commitments, uiState.settings.paydayStartDay) {
         uiState.commitments
-            .filter { !it.isSettled && (it.category == "SAYYAD_ISSUED" || it.category == "LOAN_INSTALLMENT") }
+            .filter {
+                !it.isSettled &&
+                    (it.category == "SAYYAD_ISSUED" || it.category == "LOAN_INSTALLMENT") &&
+                    com.example.domain.OrosiCashflowAnalyzer.isCommitmentDueInCurrentCycle(
+                        dueDateJalali = it.dueDateStr,
+                        paydayStartDay = uiState.settings.paydayStartDay
+                    )
+            }
+            .sumOf { it.amountToman }
+    }
+    val futureCommitmentsToman = remember(uiState.commitments, uiState.settings.paydayStartDay) {
+        uiState.commitments
+            .filter {
+                !it.isSettled &&
+                    (it.category == "SAYYAD_ISSUED" || it.category == "LOAN_INSTALLMENT") &&
+                    !com.example.domain.OrosiCashflowAnalyzer.isCommitmentDueInCurrentCycle(
+                        dueDateJalali = it.dueDateStr,
+                        paydayStartDay = uiState.settings.paydayStartDay
+                    )
+            }
             .sumOf { it.amountToman }
     }
 
@@ -355,6 +374,8 @@ fun OrosiFinanceApp(
             val onDeleteTransaction = remember(viewModel) { { tx: com.example.data.local.TransactionEntity -> viewModel.deleteTransaction(tx) } }
             val onOpenTransactionsTab = remember(viewModel) { { viewModel.navigateTo(OrosiScreen.TRANSACTIONS) } }
             val onChangeMonth = remember(viewModel) { { delta: Int -> viewModel.changeSelectedMonth(delta) } }
+            val onSelectMonth = remember(viewModel) { { ym: Int -> viewModel.selectJalaliMonth(ym) } }
+            val onRescanMonth = remember(viewModel) { { viewModel.rescanSelectedMonth() } }
             val onBackToHome = remember(viewModel) { { viewModel.navigateTo(OrosiScreen.HOME) } }
             val onSetTankhahModeEnabled = remember(viewModel) { { enabled: Boolean -> viewModel.setTankhahModeEnabled(enabled) } }
             val onAccountClick = remember(viewModel) { { account: com.example.data.local.BankAccountEntity -> viewModel.openAccountEditSheet(account) } }
@@ -401,6 +422,8 @@ fun OrosiFinanceApp(
                             hideAmounts = uiState.settings.hideAmounts,
                             isLoadingSelectedMonth = uiState.loadingMonthKey == uiState.selectedYearMonthKey,
                             onChangeMonth = onChangeMonth,
+                            onSelectMonth = onSelectMonth,
+                            onRescanMonth = onRescanMonth,
                             onTransactionClick = onTransactionClick,
                             onUntaggedMicClick = onUntaggedMicClick,
                             onDeleteTransaction = onDeleteTransaction,
@@ -535,6 +558,7 @@ fun OrosiFinanceApp(
             settings = uiState.settings,
             transactions = uiState.transactions,
             reservedCommitmentsToman = reservedCommitmentsToman,
+            futureCommitmentsToman = futureCommitmentsToman,
             onDismiss = { viewModel.setShowHeroMathSheet(false) }
         )
     }

@@ -30,7 +30,7 @@ data class RegressionSuiteReport(
  */
 object OrosiRegressionSuite {
 
-    const val EXPECTED_TOTAL_CASES = 76
+    const val EXPECTED_TOTAL_CASES = 84
 
     fun runFullRegressionAndStressSuite(): RegressionSuiteReport {
         val suiteStartNanos = System.nanoTime()
@@ -1481,6 +1481,191 @@ object OrosiRegressionSuite {
                 normalDisplay.headlineAmountToman == 7_000_000L &&
                 normalDisplay.shortfallAmountToman == 0L
             ok to "headline=${shortfallDisplay.headlineAmountToman} • shortfall=${shortfallDisplay.shortfallAmountToman} • normal=${normalDisplay.headlineAmountToman}"
+        }
+
+        // 77. Video v2.8: Settled installment million scaling + "یه ۲۵ تومن" guard + micro-fee guard
+        recordTest(
+            category = "مقیاس میلیون و قسط پرداخت‌شده (v2.8)",
+            title = "تشخیص ۲۵ میلیون برای «یه ۲۵ تومن قسط داشتم که پرداخت کردم» + حفظ کارمزد کوچک در مقیاس هزار",
+            inputSummary = "سلام من برای این ماه یه ۲۵ تومن قسط داشتم که پرداخت کردم",
+            expectedSummary = "قسط • ۲۵,۰۰۰,۰۰۰ تومان • تراکنش عادی (خرج) | هزینه قسط ۳۵ تومن = ۳۵,۰۰۰"
+        ) {
+            val settled = PersianVoiceSlangParserEngine.parseVoiceCommand(
+                "سلام من برای این ماه یه ۲۵ تومن قسط داشتم که پرداخت کردم"
+            )
+            val microFee = PersianVoiceSlangParserEngine.parseVoiceCommand(
+                "۳۵ تومان هزینه قسط پنجم وام دیشب"
+            )
+            val ok = settled.totalAmountToman == 25_000_000L &&
+                settled.purposeCategory == "قسط" &&
+                !settled.isIncome &&
+                settled.commitmentKind == null &&
+                microFee.totalAmountToman == 35_000L
+            ok to "${settled.purposeCategory} • ${PersianNumberUtils.formatToman(settled.totalAmountToman, true)} • comm=${settled.commitmentKind} | fee=${microFee.totalAmountToman}"
+        }
+
+        // 78. Video v2.8: Colloquial "حدود یه تومان" -> 1,000,000 approximate income + Basalam Blu SMS auto-match
+        recordTest(
+            category = "مقیاس میلیون و اتصال تقریبی پیامک (v2.8)",
+            title = "تشخیص «حدود یه تومان از باسلام دریافت کردم» به عنوان ۱ میلیون تقریبی + اتصال خودکار به واریز ۹۴۰,۹۷۴ بلو",
+            inputSummary = "سلام من حدود یه تومان از باسلام دریافت کردم",
+            expectedSummary = "واریزی • ۱,۰۰۰,۰۰۰ (تقریبی) • اتصال خودکار به پیامک بلو (+۹۴۰,۹۷۴)"
+        ) {
+            val parsed = PersianVoiceSlangParserEngine.parseVoiceCommand(
+                "سلام من حدود یه تومان از باسلام دریافت کردم"
+            )
+            val nowTs = JalaliCalendarUtils.jalaliDayStartMillis(1405, 9, 1) + 14L * 3_600_000L
+            val smsTs = nowTs - 20L * 3_600_000L
+            val smsJalali = JalaliCalendarUtils.fromTimestamp(smsTs)
+            val match = OrosiVoiceSmsMatcher.matchBatch(
+                items = listOf(parsed),
+                untaggedBankSms = listOf(
+                    UntaggedSmsCandidate(
+                        id = 980L,
+                        bankName = "بلو",
+                        amountToman = 940_974L,
+                        isIncome = true,
+                        timestamp = smsTs,
+                        jalaliDate = smsJalali.dateWithYear,
+                        timeStr = smsJalali.timeStr,
+                        cardInfo = "کارت بلو"
+                    )
+                ),
+                nowMillis = nowTs
+            ).first()
+            val ok = parsed.totalAmountToman == 1_000_000L &&
+                parsed.isApproximateAmount &&
+                parsed.isIncome &&
+                parsed.commitmentKind == null &&
+                match.isApproximateAutoMatch &&
+                match.matchedCandidate?.id == 980L
+            ok to "${parsed.purposeCategory} • ${parsed.totalAmountToman} (approx=${parsed.isApproximateAmount}, inc=${parsed.isIncome}) • sms=${match.matchedCandidate?.id}"
+        }
+
+        // 79. Video v2.8: Future-month commitment ("من برای ماه دی ۲۵ تومان قسط دارم")
+        recordTest(
+            category = "تعهدات ماه آینده (v2.8)",
+            title = "استخراج سررسید «ماه دی» در «من برای ماه دی ۲۵ تومان قسط دارم» + دسته‌بندی وام و قسط",
+            inputSummary = "من برای ماه دی ۲۵ تومان قسط دارم",
+            expectedSummary = "قسط • ۲۵,۰۰۰,۰۰۰ • LOAN_INSTALLMENT • تاریخ=۱ دی ... • hint=ماه دی"
+        ) {
+            val parsed = PersianVoiceSlangParserEngine.parseVoiceCommand("من برای ماه دی ۲۵ تومان قسط دارم")
+            val ok = parsed.totalAmountToman == 25_000_000L &&
+                parsed.purposeCategory == "قسط" &&
+                parsed.commitmentKind == "DEBT" &&
+                parsed.commitmentCategory == "LOAN_INSTALLMENT" &&
+                parsed.dueDateHint == "ماه دی" &&
+                parsed.explicitJalaliDate.startsWith("۱ دی ")
+            ok to "${parsed.purposeCategory} • ${parsed.totalAmountToman} • ${parsed.commitmentCategory} • date=${parsed.explicitJalaliDate} (${parsed.dueDateHint})"
+        }
+
+        // 80. Payday-cycle commitment filtering: future-month commitments excluded from current cycle hero
+        recordTest(
+            category = "فیلتر تعهدات ماه جاری (v2.8)",
+            title = "جدا کردن قسط ماه آینده (۱ دی) از «تعهدات مالی این ماه» در آذر و حفظ تعهدات جاری و معوق",
+            inputSummary = "تاریخ ۱ آذر ۱۴۰۵ • مقایسه ۱ دی، ۲۵ آذر و ۱۵ آبان",
+            expectedSummary = "۱ دی = false (ماه بعد) • ۲۵ آذر = true • ۱۵ آبان = true (معوق)"
+        ) {
+            val azar1Ts = JalaliCalendarUtils.jalaliDayStartMillis(1405, 9, 1) + 12L * 3_600_000L
+            val nextMonthIncluded = OrosiCashflowAnalyzer.isCommitmentDueInCurrentCycle("۱ دی ۱۴۰۵", 1, azar1Ts)
+            val thisMonthIncluded = OrosiCashflowAnalyzer.isCommitmentDueInCurrentCycle("۲۵ آذر ۱۴۰۵", 1, azar1Ts)
+            val overdueIncluded = OrosiCashflowAnalyzer.isCommitmentDueInCurrentCycle("۱۵ آبان ۱۴۰۵", 1, azar1Ts)
+            val ok = !nextMonthIncluded && thisMonthIncluded && overdueIncluded
+            ok to "dey=$nextMonthIncluded • azar=$thisMonthIncluded • aban=$overdueIncluded"
+        }
+
+        // 81. Pass 1C: Dateless voice utterance auto-links to strictly UNIQUE exact-amount SMS within 7 days
+        recordTest(
+            category = "اتصال خودکار پیامک ۷ روزه (v2.8)",
+            title = "اتصال خودکار «۵۰۰ تومن خرج تارا» بدون ذکر تاریخ به پیامک هم‌مبلغ یکتای ۳ روز قبل (Pass 1C)",
+            inputSummary = "۵۰۰ تومن خرج تارا + پیامک یکتای ۵۰۰,۰۰۰ تومانی بلو (۳ روز قبل)",
+            expectedSummary = "اتصال خودکار دقیق (isExactAutoMatch=true) به پیامک #۹۸۱"
+        ) {
+            val parsed = PersianVoiceSlangParserEngine.parseVoiceCommand("۵۰۰ تومن خرج تارا")
+            val nowTs = JalaliCalendarUtils.jalaliDayStartMillis(1405, 9, 1) + 14L * 3_600_000L
+            val sms3dTs = nowTs - 72L * 3_600_000L
+            val sms3dJalali = JalaliCalendarUtils.fromTimestamp(sms3dTs)
+            val match = OrosiVoiceSmsMatcher.matchBatch(
+                items = listOf(parsed),
+                untaggedBankSms = listOf(
+                    UntaggedSmsCandidate(
+                        id = 981L,
+                        bankName = "بلو",
+                        amountToman = 500_000L,
+                        isIncome = false,
+                        timestamp = sms3dTs,
+                        jalaliDate = sms3dJalali.dateWithYear,
+                        timeStr = sms3dJalali.timeStr,
+                        cardInfo = "کارت بلو"
+                    )
+                ),
+                nowMillis = nowTs
+            ).first()
+            val ok = parsed.totalAmountToman == 500_000L &&
+                !parsed.isVagueRecentPast &&
+                match.isExactAutoMatch &&
+                match.matchedCandidate?.id == 981L
+            ok to "exact=${match.isExactAutoMatch} • matched=${match.matchedCandidate?.id} • title=${parsed.purposeCategory}"
+        }
+
+        // 82. Pass 1C ambiguity guard: 2 identical-amount SMS in 2..7 days MUST NOT guess; surface suggestion instead
+        recordTest(
+            category = "محافظت از ابهام پیامک ۷ روزه (v2.8)",
+            title = "عدم حدس خودکار هنگام وجود ۲ پیامک هم‌مبلغ ۵۰۰,۰۰۰ تومانی در ۲ تا ۷ روز قبل + نمایش دکمه پیشنهاد",
+            inputSummary = "۵۰۰ تومن خرج تارا + دو پیامک ۵۰۰,۰۰۰ تومانی (۳ و ۵ روز قبل)",
+            expectedSummary = "matchedCandidate=null • suggestedCandidate!=null"
+        ) {
+            val parsed = PersianVoiceSlangParserEngine.parseVoiceCommand("۵۰۰ تومن خرج تارا")
+            val nowTs = JalaliCalendarUtils.jalaliDayStartMillis(1405, 9, 1) + 14L * 3_600_000L
+            val sms3dTs = nowTs - 72L * 3_600_000L
+            val sms5dTs = nowTs - 120L * 3_600_000L
+            val sms3dJalali = JalaliCalendarUtils.fromTimestamp(sms3dTs)
+            val sms5dJalali = JalaliCalendarUtils.fromTimestamp(sms5dTs)
+            val match = OrosiVoiceSmsMatcher.matchBatch(
+                items = listOf(parsed),
+                untaggedBankSms = listOf(
+                    UntaggedSmsCandidate(982L, "بلو", 500_000L, false, sms3dTs, sms3dJalali.dateWithYear, sms3dJalali.timeStr, "کارت بلو"),
+                    UntaggedSmsCandidate(983L, "سپه", 500_000L, false, sms5dTs, sms5dJalali.dateWithYear, sms5dJalali.timeStr, "کارت سپه")
+                ),
+                nowMillis = nowTs
+            ).first()
+            val ok = match.matchedCandidate == null &&
+                !match.isExactAutoMatch &&
+                match.suggestedCandidate?.id == 982L
+            ok to "matched=${match.matchedCandidate?.id} • suggested=${match.suggestedCandidate?.id}"
+        }
+
+        // 83. Standalone Jalali month resolver + year rollover + brand guard ("آبان تتر")
+        recordTest(
+            category = "تقویم شمسی و تغییر سال (v2.8)",
+            title = "تبدیل «ماه فروردین» در آذر به سال بعد (۱ فروردین ۱۴۰۶)، «دی ماه» به ۱ دی ۱۴۰۵ و محافظت از برند «آبان تتر»",
+            inputSummary = "تاریخ مبنا ۱ آذر ۱۴۰۵ • ماه فروردین / دی ماه / صرافی آبان تتر",
+            expectedSummary = "۱ فروردین ۱۴۰۶ • ۱ دی ۱۴۰۵ • null"
+        ) {
+            val azar1Ts = JalaliCalendarUtils.jalaliDayStartMillis(1405, 9, 1) + 12L * 3_600_000L
+            val nextYearFarvardin = JalaliCalendarUtils.resolveStandaloneJalaliMonthDate("ماه فروردین", azar1Ts)
+            val sameYearDey = JalaliCalendarUtils.resolveStandaloneJalaliMonthDate("دی ماه", azar1Ts)
+            val brandGuard = JalaliCalendarUtils.resolveStandaloneJalaliMonthDate("صرافی آبان تتر", azar1Ts)
+            val ok = nextYearFarvardin == "۱ فروردین ۱۴۰۶" &&
+                sameYearDey == "۱ دی ۱۴۰۵" &&
+                brandGuard == null
+            ok to "farvardin=$nextYearFarvardin • dey=$sameYearDey • brand=$brandGuard"
+        }
+
+        // 84. Colloquial single-million ("یه تومن" / "یک تومان") vs explicit "یک هزار تومان"
+        recordTest(
+            category = "مقیاس محاوره‌ای یک میلیون (v2.8)",
+            title = "تفکیک «یه تومن» و «یک تومان» (۱,۰۰۰,۰۰۰) از «یک هزار تومان» و «هزار تومن» (۱,۰۰۰)",
+            inputSummary = "یه تومن خریدم / یک تومان دادم / یک هزار تومان نانوایی",
+            expectedSummary = "۱,۰۰۰,۰۰۰ • ۱,۰۰۰,۰۰۰ • ۱,۰۰۰"
+        ) {
+            val c1 = PersianVoiceSlangParserEngine.parseVoiceCommand("یه تومن خریدم از دیجی‌کالا")
+            val c2 = PersianVoiceSlangParserEngine.parseVoiceCommand("یک تومان دادم به علی")
+            val c3 = PersianVoiceSlangParserEngine.parseVoiceCommand("یک هزار تومان نانوایی")
+            val ok = c1.totalAmountToman == 1_000_000L &&
+                c2.totalAmountToman == 1_000_000L &&
+                c3.totalAmountToman == 1_000L
+            ok to "c1=${c1.totalAmountToman} • c2=${c2.totalAmountToman} • c3=${c3.totalAmountToman}"
         }
 
         val totalMs = ((System.nanoTime() - suiteStartNanos) / 1_000_000L).coerceAtLeast(1L)

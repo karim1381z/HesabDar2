@@ -25,17 +25,24 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -63,6 +70,7 @@ import com.example.ui.theme.OrosiHairline
 import com.example.ui.theme.OrosiOnSurfaceVariant
 import com.example.ui.theme.OrosiSurfaceContainer
 import com.example.ui.theme.OrosiSurfaceHigh
+import com.example.ui.theme.OrosiSurfaceLow
 import com.example.ui.theme.PersianLapisLight
 import com.example.ui.theme.RubyRose
 import com.example.ui.theme.RubyRoseSoft
@@ -76,6 +84,7 @@ private val jalaliMonthNames = arrayOf(
 // Hoisted static shapes and colors matching the approved AccountsScreen minimalist aesthetic
 private val TxCardShape20 = RoundedCornerShape(20.dp)
 private val TxMicPillShape12 = RoundedCornerShape(12.dp)
+private val TxBarPillShape = RoundedCornerShape(50)
 private val TxIncomeIconBg = NishapurTurquoiseBright.copy(alpha = 0.20f)
 private val TxExpenseIconBg = RubyRoseSoft.copy(alpha = 0.18f)
 private val TxIncomeTagBg = NishapurTurquoiseDeep.copy(alpha = 0.72f)
@@ -84,6 +93,10 @@ private val TxDividerColor = OrosiHairline.copy(alpha = 0.50f)
 private val TxUnitIncomeColor = NishapurTurquoiseSoft.copy(alpha = 0.80f)
 private val TxUnitExpenseColor = RubyRoseSoft.copy(alpha = 0.80f)
 private val TxUnitMutedColor = OrosiOnSurfaceVariant.copy(alpha = 0.80f)
+private val TxBarIncomeColor = NishapurTurquoiseBright.copy(alpha = 0.78f)
+private val TxBarExpenseColor = RubyRoseSoft.copy(alpha = 0.72f)
+private val TxBarGoldColor = SaffronGoldLight.copy(alpha = 0.72f)
+private val TxBarMutedColor = OrosiOnSurfaceVariant.copy(alpha = 0.45f)
 
 @Immutable
 private data class LedgerTxRowUi(
@@ -94,6 +107,7 @@ private data class LedgerTxRowUi(
     val isIncome: Boolean,
     val accentColor: Color,
     val unitColor: Color,
+    val edgeBarColor: Color,
     val displayAmountToman: Long,
     val formattedAmountRun: String,
     val hasCustomNote: Boolean,
@@ -110,6 +124,7 @@ private data class DayTransactionGroup(
     val rows: List<LedgerTxRowUi>
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TransactionsScreen(
     transactions: List<TransactionEntity>,
@@ -117,6 +132,8 @@ fun TransactionsScreen(
     hideAmounts: Boolean,
     isLoadingSelectedMonth: Boolean = false,
     onChangeMonth: (Int) -> Unit,
+    onSelectMonth: (Int) -> Unit = {},
+    onRescanMonth: () -> Unit = {},
     onTransactionClick: (TransactionEntity) -> Unit,
     onUntaggedMicClick: (TransactionEntity) -> Unit,
     onDeleteTransaction: (TransactionEntity) -> Unit = {},
@@ -124,6 +141,7 @@ fun TransactionsScreen(
     modifier: Modifier = Modifier
 ) {
     BackHandler(onBack = onBackToHome)
+    var showMonthPickerSheet by remember { mutableStateOf(false) }
 
     val currentYearMonthKey = remember {
         JalaliCalendarUtils.fromTimestamp(System.currentTimeMillis()).yearMonthKey
@@ -197,6 +215,12 @@ fun TransactionsScreen(
                         "SELF_TRANSFER" -> TxUnitMutedColor
                         else -> TxUnitExpenseColor
                     }
+                    val barColor = when (tx.type) {
+                        "INCOME" -> TxBarIncomeColor
+                        "GOLD_SAVE" -> TxBarGoldColor
+                        "SELF_TRANSFER" -> TxBarMutedColor
+                        else -> TxBarExpenseColor
+                    }
                     LedgerTxRowUi(
                         transaction = tx,
                         shortBank = shortBank,
@@ -205,6 +229,7 @@ fun TransactionsScreen(
                         isIncome = isIncome,
                         accentColor = amountColor,
                         unitColor = uColor,
+                        edgeBarColor = barColor,
                         displayAmountToman = dispAmt,
                         formattedAmountRun = PersianNumberUtils.formatIsolatedAmountRun(dispAmt, isIncome),
                         hasCustomNote = hasCustomNote,
@@ -268,15 +293,32 @@ fun TransactionsScreen(
                     }
                 }
 
-                Text(
-                    text = monthHeaderLabel,
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 16.5.sp
-                    ),
-                    color = AlabasterSilk,
-                    modifier = Modifier.testTag("selected_month_label")
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier
+                        .clip(TxBarPillShape)
+                        .background(OrosiSurfaceHigh.copy(alpha = 0.72f))
+                        .clickable { showMonthPickerSheet = true }
+                        .padding(horizontal = 14.dp, vertical = 7.dp)
+                        .testTag("open_month_picker_button")
+                ) {
+                    Text(
+                        text = monthHeaderLabel,
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 16.sp
+                        ),
+                        color = AlabasterSilk,
+                        modifier = Modifier.testTag("selected_month_label")
+                    )
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = "انتخاب سریع ماه و سال",
+                        tint = NishapurTurquoiseSoft,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
 
                 Box(
                     contentAlignment = Alignment.Center,
@@ -462,6 +504,36 @@ fun TransactionsScreen(
                         color = AlabasterSilk,
                         textAlign = TextAlign.Center
                     )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Surface(
+                        onClick = onRescanMonth,
+                        shape = RoundedCornerShape(14.dp),
+                        color = NishapurTurquoiseDeep.copy(alpha = 0.72f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.2.dp,
+                            NishapurTurquoiseBright.copy(alpha = 0.72f)
+                        ),
+                        modifier = Modifier.testTag("rescan_empty_month_button")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = null,
+                                tint = NishapurTurquoiseBright,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "بررسی دوباره پیامک‌های این ماه",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = AlabasterSilk
+                            )
+                        }
+                    }
                 }
             }
         } else {
@@ -545,6 +617,169 @@ fun TransactionsScreen(
             }
         }
     }
+    if (showMonthPickerSheet) {
+        JalaliMonthYearQuickPickerSheet(
+            selectedYearMonthKey = selectedYearMonthKey,
+            maxYearMonthKey = currentYearMonthKey,
+            onSelectYearMonth = { ym ->
+                showMonthPickerSheet = false
+                onSelectMonth(ym)
+            },
+            onDismiss = { showMonthPickerSheet = false }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun JalaliMonthYearQuickPickerSheet(
+    selectedYearMonthKey: Int,
+    maxYearMonthKey: Int,
+    onSelectYearMonth: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val maxYear = maxYearMonthKey / 100
+    val minYear = (maxYear - 8).coerceAtLeast(1395)
+    var pickerYear by remember(selectedYearMonthKey) { mutableIntStateOf(selectedYearMonthKey / 100) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = OrosiSurfaceLow,
+        contentColor = AlabasterSilk
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp)
+                .testTag("jalali_month_picker_sheet"),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text(
+                text = "انتخاب سریع ماه و سال",
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold),
+                color = AlabasterSilk
+            )
+
+            // Year switcher (< Prev Year | Year | Next Year >)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(OrosiSurfaceHigh, TxCardShape20)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val canGoPrevYear = pickerYear > minYear
+                val canGoNextYear = pickerYear < maxYear
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(if (canGoPrevYear) OrosiSurfaceContainer else OrosiSurfaceContainer.copy(alpha = 0.35f))
+                ) {
+                    IconButton(
+                        onClick = { if (canGoPrevYear) pickerYear -= 1 },
+                        enabled = canGoPrevYear,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag("month_picker_prev_year")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = "سال قبل",
+                            tint = if (canGoPrevYear) AlabasterSilk else OrosiOnSurfaceVariant.copy(alpha = 0.30f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+
+                Text(
+                    text = "سال ${PersianNumberUtils.toPersianDigits(pickerYear.toString())}",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                    color = AlabasterSilk,
+                    modifier = Modifier.testTag("month_picker_year_label")
+                )
+
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(if (canGoNextYear) OrosiSurfaceContainer else OrosiSurfaceContainer.copy(alpha = 0.35f))
+                ) {
+                    IconButton(
+                        onClick = { if (canGoNextYear) pickerYear += 1 },
+                        enabled = canGoNextYear,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag("month_picker_next_year")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ChevronLeft,
+                            contentDescription = "سال بعد",
+                            tint = if (canGoNextYear) AlabasterSilk else OrosiOnSurfaceVariant.copy(alpha = 0.30f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+
+            // 4 rows × 3 columns grid of all 12 Jalali months
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (rowIdx in 0 until 4) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        for (colIdx in 0 until 3) {
+                            val monthNum = rowIdx * 3 + colIdx + 1
+                            val ymKey = pickerYear * 100 + monthNum
+                            val isEnabled = ymKey <= maxYearMonthKey
+                            val isSelected = ymKey == selectedYearMonthKey
+                            Surface(
+                                onClick = { if (isEnabled) onSelectYearMonth(ymKey) },
+                                enabled = isEnabled,
+                                shape = RoundedCornerShape(14.dp),
+                                color = when {
+                                    isSelected -> NishapurTurquoiseDeep
+                                    isEnabled -> OrosiSurfaceHigh
+                                    else -> OrosiSurfaceContainer.copy(alpha = 0.38f)
+                                },
+                                border = if (isSelected) {
+                                    androidx.compose.foundation.BorderStroke(1.3.dp, NishapurTurquoiseBright)
+                                } else null,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("month_picker_cell_$ymKey")
+                            ) {
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier.padding(vertical = 12.dp, horizontal = 6.dp)
+                                ) {
+                                    Text(
+                                        text = jalaliMonthNames[monthNum - 1],
+                                        style = MaterialTheme.typography.labelLarge.copy(
+                                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold
+                                        ),
+                                        color = when {
+                                            isSelected -> AlabasterSilk
+                                            isEnabled -> AlabasterSilk.copy(alpha = 0.90f)
+                                            else -> OrosiOnSurfaceVariant.copy(alpha = 0.35f)
+                                        },
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -566,16 +801,22 @@ private fun MinimalLedgerTransactionCard(
                 onClick = { onTransactionClick(tx) },
                 onLongClick = if (onRowLongClickId != null) { { onRowLongClickId(tx.id) } } else null
             )
-            .padding(horizontal = 15.dp, vertical = 13.dp)
+            .padding(start = 10.dp, end = 14.dp, top = 12.dp, bottom = 12.dp)
             .testTag("grouped_tx_${tx.id}"),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        Box(
+            modifier = Modifier
+                .width(3.5.dp)
+                .height(36.dp)
+                .background(row.edgeBarColor, TxBarPillShape)
+        )
+
         BankLogoAvatar(
             bankName = row.shortBank,
             size = 40.dp,
-            preResolvedLogoKey = row.logoKey,
-            directionIndicatorIsIncome = row.isIncome
+            preResolvedLogoKey = row.logoKey
         )
 
         Column(

@@ -525,15 +525,14 @@ fun VoiceOverlayBottomSheet(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // 1.5 Transaction Direction Selector (tactile Material 3 segmented toggle for single-item new entry)
-            if (targetTx == null && !hasMultiItems) {
-                val isSingleComm = voiceState.commitmentKind != null
+            // 1.5 Transaction Direction Selector (shown strictly for regular single-item transactions;
+            // commitments manage their category & بدهکارم/طلبکارم cleanly inside VoiceDestinationControlSection!)
+            if (targetTx == null && !hasMultiItems && voiceState.commitmentKind == null) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(16.dp))
                         .background(OrosiSurfaceContainer)
-                        .border(1.dp, PersianLapisLight.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
                         .padding(5.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -566,7 +565,7 @@ fun VoiceOverlayBottomSheet(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (isSingleComm) "بدهی / برنامه خرید" else "پرداختی",
+                                text = "پرداختی",
                                 style = MaterialTheme.typography.labelLarge.copy(
                                     fontWeight = if (isExpenseSelected) FontWeight.ExtraBold else FontWeight.Medium
                                 ),
@@ -603,7 +602,7 @@ fun VoiceOverlayBottomSheet(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (isSingleComm) "طلب / واریز آینده" else "دریافتی",
+                                text = "دریافتی",
                                 style = MaterialTheme.typography.labelLarge.copy(
                                     fontWeight = if (isIncomeSelected) FontWeight.ExtraBold else FontWeight.Medium
                                 ),
@@ -818,87 +817,90 @@ fun VoiceOverlayBottomSheet(
                                 )
                             }
 
-                            // Row 2: Tactile 2-Way Direction Buttons (borderless track; bright borders strictly on buttons)
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(Color.Black.copy(alpha = 0.24f))
-                                    .padding(4.dp)
-                                    .testTag("multi_voice_item_type_$idx"),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Surface(
-                                    onClick = { if (targetTx == null) onSetMultiItemType(idx, false) },
-                                    enabled = targetTx == null,
-                                    shape = RoundedCornerShape(9.dp),
-                                    color = if (!item.isIncome) RubyRose.copy(alpha = 0.38f) else OrosiSurfaceHigh.copy(alpha = 0.55f),
-                                    border = androidx.compose.foundation.BorderStroke(
-                                        width = if (!item.isIncome) 1.3.dp else 0.9.dp,
-                                        color = if (!item.isIncome) RubyRoseSoft else PersianLapisLight.copy(alpha = 0.24f)
-                                    ),
+                            // Row 2: Tactile 2-Way Direction Buttons (only for regular transactions;
+                            // commitment cards manage category & بدهکارم/طلبکارم cleanly below!)
+                            if (!isCommItem) {
+                                Row(
                                     modifier = Modifier
-                                        .weight(1f)
-                                        .heightIn(min = 38.dp)
-                                        .testTag("multi_voice_item_expense_$idx")
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Color.Black.copy(alpha = 0.24f))
+                                        .padding(4.dp)
+                                        .testTag("multi_voice_item_type_$idx"),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    Row(
-                                        horizontalArrangement = Arrangement.Center,
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(vertical = 7.dp, horizontal = 8.dp)
+                                    Surface(
+                                        onClick = { if (targetTx == null) onSetMultiItemType(idx, false) },
+                                        enabled = targetTx == null,
+                                        shape = RoundedCornerShape(9.dp),
+                                        color = if (!item.isIncome) RubyRose.copy(alpha = 0.38f) else OrosiSurfaceHigh.copy(alpha = 0.55f),
+                                        border = androidx.compose.foundation.BorderStroke(
+                                            width = if (!item.isIncome) 1.3.dp else 0.9.dp,
+                                            color = if (!item.isIncome) RubyRoseSoft else PersianLapisLight.copy(alpha = 0.24f)
+                                        ),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .heightIn(min = 38.dp)
+                                            .testTag("multi_voice_item_expense_$idx")
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Outlined.ArrowUpward,
-                                            contentDescription = null,
-                                            tint = if (!item.isIncome) RubyRoseSoft else OrosiOnSurfaceVariant,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(5.dp))
-                                        Text(
-                                            text = if (isCommItem) "بدهی" else "پرداختی",
-                                            style = MaterialTheme.typography.labelMedium.copy(
-                                                fontWeight = if (!item.isIncome) FontWeight.ExtraBold else FontWeight.SemiBold
-                                            ),
-                                            color = if (!item.isIncome) AlabasterSilk else OrosiOnSurfaceVariant,
-                                            maxLines = 1
-                                        )
+                                        Row(
+                                            horizontalArrangement = Arrangement.Center,
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(vertical = 7.dp, horizontal = 8.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.ArrowUpward,
+                                                contentDescription = null,
+                                                tint = if (!item.isIncome) RubyRoseSoft else OrosiOnSurfaceVariant,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(5.dp))
+                                            Text(
+                                                text = "پرداختی",
+                                                style = MaterialTheme.typography.labelMedium.copy(
+                                                    fontWeight = if (!item.isIncome) FontWeight.ExtraBold else FontWeight.SemiBold
+                                                ),
+                                                color = if (!item.isIncome) AlabasterSilk else OrosiOnSurfaceVariant,
+                                                maxLines = 1
+                                            )
+                                        }
                                     }
-                                }
 
-                                Surface(
-                                    onClick = { if (targetTx == null) onSetMultiItemType(idx, true) },
-                                    enabled = targetTx == null,
-                                    shape = RoundedCornerShape(9.dp),
-                                    color = if (item.isIncome) NishapurTurquoiseDeep else OrosiSurfaceHigh.copy(alpha = 0.55f),
-                                    border = androidx.compose.foundation.BorderStroke(
-                                        width = if (item.isIncome) 1.3.dp else 0.9.dp,
-                                        color = if (item.isIncome) NishapurTurquoiseBright else PersianLapisLight.copy(alpha = 0.24f)
-                                    ),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .heightIn(min = 38.dp)
-                                        .testTag("multi_voice_item_income_$idx")
-                                ) {
-                                    Row(
-                                        horizontalArrangement = Arrangement.Center,
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(vertical = 7.dp, horizontal = 8.dp)
+                                    Surface(
+                                        onClick = { if (targetTx == null) onSetMultiItemType(idx, true) },
+                                        enabled = targetTx == null,
+                                        shape = RoundedCornerShape(9.dp),
+                                        color = if (item.isIncome) NishapurTurquoiseDeep else OrosiSurfaceHigh.copy(alpha = 0.55f),
+                                        border = androidx.compose.foundation.BorderStroke(
+                                            width = if (item.isIncome) 1.3.dp else 0.9.dp,
+                                            color = if (item.isIncome) NishapurTurquoiseBright else PersianLapisLight.copy(alpha = 0.24f)
+                                        ),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .heightIn(min = 38.dp)
+                                            .testTag("multi_voice_item_income_$idx")
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Outlined.ArrowDownward,
-                                            contentDescription = null,
-                                            tint = if (item.isIncome) NishapurTurquoiseBright else OrosiOnSurfaceVariant,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(5.dp))
-                                        Text(
-                                            text = if (isCommItem) "طلب" else "دریافتی",
-                                            style = MaterialTheme.typography.labelMedium.copy(
-                                                fontWeight = if (item.isIncome) FontWeight.ExtraBold else FontWeight.SemiBold
-                                            ),
-                                            color = if (item.isIncome) AlabasterSilk else OrosiOnSurfaceVariant,
-                                            maxLines = 1
-                                        )
+                                        Row(
+                                            horizontalArrangement = Arrangement.Center,
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(vertical = 7.dp, horizontal = 8.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.ArrowDownward,
+                                                contentDescription = null,
+                                                tint = if (item.isIncome) NishapurTurquoiseBright else OrosiOnSurfaceVariant,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(5.dp))
+                                            Text(
+                                                text = "دریافتی",
+                                                style = MaterialTheme.typography.labelMedium.copy(
+                                                    fontWeight = if (item.isIncome) FontWeight.ExtraBold else FontWeight.SemiBold
+                                                ),
+                                                color = if (item.isIncome) AlabasterSilk else OrosiOnSurfaceVariant,
+                                                maxLines = 1
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1019,9 +1021,14 @@ fun VoiceOverlayBottomSheet(
                                     commitmentCategory = item.commitmentCategory,
                                     dueDateHint = item.dueDateHint,
                                     testTagPrefix = "multi_$idx",
+                                    debtTestTag = "multi_voice_item_expense_$idx",
+                                    receivableTestTag = "multi_voice_item_income_$idx",
                                     onToggleDestination = { onToggleMultiItemDestination(idx) },
                                     onSelectCommitmentCategory = { cat ->
                                         onSetMultiItemCommitmentCategory(idx, cat)
+                                    },
+                                    onSetCommitmentIsIncome = { isInc ->
+                                        onSetMultiItemType(idx, isInc)
                                     }
                                 )
                             }
@@ -1222,21 +1229,36 @@ fun VoiceOverlayBottomSheet(
                                     modifier = Modifier.weight(1f)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
+                                val badgeBg = when {
+                                    isSingleCommitment && (voiceState.commitmentCategory == "LOAN_INSTALLMENT" || voiceState.commitmentCategory == "SAYYAD_ISSUED") ->
+                                        RoyalAmethyst.copy(alpha = 0.36f)
+                                    voiceState.isIncome -> NishapurTurquoiseDeep.copy(alpha = 0.72f)
+                                    else -> RubyRose.copy(alpha = 0.22f)
+                                }
+                                val badgeTextColor = when {
+                                    isSingleCommitment && (voiceState.commitmentCategory == "LOAN_INSTALLMENT" || voiceState.commitmentCategory == "SAYYAD_ISSUED") ->
+                                        RoyalAmethystSoft
+                                    voiceState.isIncome -> NishapurTurquoiseSoft
+                                    else -> RubyRoseSoft
+                                }
+                                val badgeLabel = when {
+                                    isSingleCommitment && voiceState.commitmentCategory == "LOAN_INSTALLMENT" -> "وام و قسط"
+                                    isSingleCommitment && voiceState.commitmentCategory == "SAYYAD_ISSUED" -> "چک صیادی"
+                                    isSingleCommitment && voiceState.isIncome -> "تعهد: طلب"
+                                    isSingleCommitment -> "تعهد: بدهی"
+                                    voiceState.isIncome -> "دریافتی"
+                                    else -> "پرداختی"
+                                }
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(10.dp))
-                                        .background(if (voiceState.isIncome) NishapurTurquoiseDeep.copy(alpha = 0.72f) else RubyRose.copy(alpha = 0.22f))
+                                        .background(badgeBg)
                                         .padding(horizontal = 9.dp, vertical = 3.dp)
                                 ) {
                                     Text(
-                                        text = when {
-                                            isSingleCommitment && voiceState.isIncome -> "تعهد: طلب"
-                                            isSingleCommitment -> "تعهد: بدهی"
-                                            voiceState.isIncome -> "دریافتی"
-                                            else -> "پرداختی"
-                                        },
+                                        text = badgeLabel,
                                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
-                                        color = if (voiceState.isIncome) NishapurTurquoiseSoft else RubyRoseSoft
+                                        color = badgeTextColor
                                     )
                                 }
                             }
@@ -1367,8 +1389,11 @@ fun VoiceOverlayBottomSheet(
                                 commitmentCategory = voiceState.commitmentCategory,
                                 dueDateHint = voiceState.dueDateHint,
                                 testTagPrefix = "single",
+                                debtTestTag = "voice_tx_type_expense",
+                                receivableTestTag = "voice_tx_type_income",
                                 onToggleDestination = onToggleSingleDestination,
-                                onSelectCommitmentCategory = onSetSingleCommitmentCategory
+                                onSelectCommitmentCategory = onSetSingleCommitmentCategory,
+                                onSetCommitmentIsIncome = onTransactionTypeChange
                             )
 
                             if (!isSingleCommitment) {
@@ -1786,8 +1811,11 @@ private fun VoiceDestinationControlSection(
     commitmentCategory: String,
     dueDateHint: String,
     testTagPrefix: String,
+    debtTestTag: String = "",
+    receivableTestTag: String = "",
     onToggleDestination: () -> Unit,
-    onSelectCommitmentCategory: (String) -> Unit
+    onSelectCommitmentCategory: (String) -> Unit,
+    onSetCommitmentIsIncome: ((Boolean) -> Unit)? = null
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -1893,12 +1921,55 @@ private fun VoiceDestinationControlSection(
                 }
             }
 
-            if (!isIncome) {
-                val categoryOptions = listOf(
-                    "LOAN_INSTALLMENT" to "وام و قسط",
-                    "SAYYAD_ISSUED" to "چک صیادی",
-                    "DONG" to "بدهی و طلب"
-                )
+            // Always display all 3 commitment categories cleanly (no conflicting top toggle!)
+            val categoryOptions = listOf(
+                "LOAN_INSTALLMENT" to "وام و قسط",
+                "SAYYAD_ISSUED" to "چک صیادی",
+                "DONG" to "بدهی و طلب"
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.Black.copy(alpha = 0.24f))
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                categoryOptions.forEach { (catKey, label) ->
+                    val selected = commitmentCategory == catKey
+                    Surface(
+                        onClick = { onSelectCommitmentCategory(catKey) },
+                        shape = RoundedCornerShape(9.dp),
+                        color = if (selected) RoyalAmethyst.copy(alpha = 0.62f) else OrosiSurfaceHigh.copy(alpha = 0.45f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            width = if (selected) 1.3.dp else 0.9.dp,
+                            color = if (selected) RoyalAmethystSoft else PersianLapisLight.copy(alpha = 0.24f)
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 36.dp)
+                            .testTag("voice_comm_cat_${testTagPrefix}_$catKey")
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold
+                                ),
+                                color = if (selected) AlabasterSilk else OrosiOnSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Only show بدهکارم / طلبکارم sub-toggle when category is "بدهی و طلب" (DONG)
+            if (commitmentCategory == "DONG" && onSetCommitmentIsIncome != null) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1907,35 +1978,77 @@ private fun VoiceDestinationControlSection(
                         .padding(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    categoryOptions.forEach { (catKey, label) ->
-                        val selected = commitmentCategory == catKey
-                        Surface(
-                            onClick = { onSelectCommitmentCategory(catKey) },
-                            shape = RoundedCornerShape(9.dp),
-                            color = if (selected) RoyalAmethyst.copy(alpha = 0.62f) else OrosiSurfaceHigh.copy(alpha = 0.45f),
-                            border = androidx.compose.foundation.BorderStroke(
-                                width = if (selected) 1.3.dp else 0.9.dp,
-                                color = if (selected) RoyalAmethystSoft else PersianLapisLight.copy(alpha = 0.24f)
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 36.dp)
-                                .testTag("voice_comm_cat_${testTagPrefix}_$catKey")
+                    val isDebtSelected = !isIncome
+                    val isReceivableSelected = isIncome
+                    Surface(
+                        onClick = { onSetCommitmentIsIncome(false) },
+                        shape = RoundedCornerShape(9.dp),
+                        color = if (isDebtSelected) RubyRose.copy(alpha = 0.36f) else OrosiSurfaceHigh.copy(alpha = 0.45f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            width = if (isDebtSelected) 1.3.dp else 0.9.dp,
+                            color = if (isDebtSelected) RubyRoseSoft else PersianLapisLight.copy(alpha = 0.24f)
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 36.dp)
+                            .let { if (debtTestTag.isNotBlank()) it.testTag(debtTestTag) else it }
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
                         ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)
-                            ) {
-                                Text(
-                                    text = label,
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold
-                                    ),
-                                    color = if (selected) AlabasterSilk else OrosiOnSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
+                            Icon(
+                                imageVector = Icons.Outlined.ArrowUpward,
+                                contentDescription = null,
+                                tint = if (isDebtSelected) RubyRoseSoft else OrosiOnSurfaceVariant,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "بدهکارم (بدهی)",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = if (isDebtSelected) FontWeight.ExtraBold else FontWeight.SemiBold
+                                ),
+                                color = if (isDebtSelected) AlabasterSilk else OrosiOnSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+                    }
+
+                    Surface(
+                        onClick = { onSetCommitmentIsIncome(true) },
+                        shape = RoundedCornerShape(9.dp),
+                        color = if (isReceivableSelected) NishapurTurquoiseDeep else OrosiSurfaceHigh.copy(alpha = 0.45f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            width = if (isReceivableSelected) 1.3.dp else 0.9.dp,
+                            color = if (isReceivableSelected) NishapurTurquoiseBright else PersianLapisLight.copy(alpha = 0.24f)
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 36.dp)
+                            .let { if (receivableTestTag.isNotBlank()) it.testTag(receivableTestTag) else it }
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.ArrowDownward,
+                                contentDescription = null,
+                                tint = if (isReceivableSelected) NishapurTurquoiseBright else OrosiOnSurfaceVariant,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "طلبکارم (طلب)",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = if (isReceivableSelected) FontWeight.ExtraBold else FontWeight.SemiBold
+                                ),
+                                color = if (isReceivableSelected) AlabasterSilk else OrosiOnSurfaceVariant,
+                                maxLines = 1
+                            )
                         }
                     }
                 }
@@ -1950,6 +2063,7 @@ fun HeroMathBreakdownBottomSheet(
     settings: AppSettingsEntity,
     transactions: List<TransactionEntity>,
     reservedCommitmentsToman: Long,
+    futureCommitmentsToman: Long = 0L,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -2082,7 +2196,7 @@ fun HeroMathBreakdownBottomSheet(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(16.dp))
-                        .background(OrosiSurfaceContainer)
+                        .background(OrosiSurfaceHigh)
                         .padding(horizontal = 8.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -2092,7 +2206,7 @@ fun HeroMathBreakdownBottomSheet(
                         modifier = Modifier
                             .size(34.dp)
                             .clip(CircleShape)
-                            .background(OrosiSurfaceHigh)
+                            .background(OrosiSurfaceContainer)
                     ) {
                         IconButton(
                             onClick = { cycleOffsetMonths = (cycleOffsetMonths - 1).coerceAtLeast(-24) },
@@ -2133,7 +2247,7 @@ fun HeroMathBreakdownBottomSheet(
                             .size(34.dp)
                             .clip(CircleShape)
                             .background(
-                                if (canGoNextCycle) OrosiSurfaceHigh else OrosiSurfaceHigh.copy(alpha = 0.35f)
+                                if (canGoNextCycle) OrosiSurfaceContainer else OrosiSurfaceContainer.copy(alpha = 0.35f)
                             )
                     ) {
                         IconButton(
@@ -2166,7 +2280,7 @@ fun HeroMathBreakdownBottomSheet(
                 }
             }
 
-            // 2. Calm Minimalist Primary View: Inflow & Outflow (2-Column Borderless KPI Cards)
+            // 2. Calm Minimalist Primary View: Inflow & Outflow (Lifted Tonal Dark-Mode KPI Cards)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -2175,7 +2289,7 @@ fun HeroMathBreakdownBottomSheet(
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(20.dp))
-                        .background(NishapurTurquoiseDeep.copy(alpha = 0.52f))
+                        .background(Color(0xFF133A42))
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
@@ -2188,7 +2302,7 @@ fun HeroMathBreakdownBottomSheet(
                             modifier = Modifier
                                 .size(24.dp)
                                 .clip(CircleShape)
-                                .background(NishapurTurquoiseBright.copy(alpha = 0.20f))
+                                .background(NishapurTurquoiseBright.copy(alpha = 0.24f))
                         ) {
                             Icon(
                                 imageVector = Icons.Outlined.ArrowDownward,
@@ -2220,7 +2334,7 @@ fun HeroMathBreakdownBottomSheet(
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(20.dp))
-                        .background(RubyRose.copy(alpha = 0.18f))
+                        .background(Color(0xFF391F2E))
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
@@ -2233,7 +2347,7 @@ fun HeroMathBreakdownBottomSheet(
                             modifier = Modifier
                                 .size(24.dp)
                                 .clip(CircleShape)
-                                .background(RubyRoseSoft.copy(alpha = 0.18f))
+                                .background(RubyRoseSoft.copy(alpha = 0.22f))
                         ) {
                             Icon(
                                 imageVector = Icons.Outlined.ArrowUpward,
@@ -2261,12 +2375,12 @@ fun HeroMathBreakdownBottomSheet(
                 }
             }
 
-            // 3. Primary Net Cashflow Card
+            // 3. Primary Net Cashflow Card (Lifted Tonal Card)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(20.dp))
-                    .background(OrosiSurfaceContainer)
+                    .background(OrosiSurfaceHigh)
                     .padding(horizontal = 16.dp, vertical = 14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
@@ -2290,38 +2404,63 @@ fun HeroMathBreakdownBottomSheet(
                 )
             }
 
-            // 4. Clean Daily Safe Budget Hero Strip (No duplicate balance clutter)
-            Row(
+            // 4. Daily Safe Budget Hero Card with Transparent 1-Line Formula Caption
+            val remainingDaysToPayday = remember(settings.paydayStartDay) {
+                JalaliCalendarUtils.calculateRemainingDaysToPayday(settings.paydayStartDay).coerceIn(1, 30)
+            }
+            val freeCashForDaily = (settings.monthlyBalanceToman - reservedCommitmentsToman).coerceAtLeast(0L)
+            val dailyFormulaCaption = when {
+                reservedCommitmentsToman > settings.monthlyBalanceToman && settings.monthlyBalanceToman > 0L ->
+                    "تعهدات این ماه بیشتر از موجودی فعلی حساب‌ها است"
+                freeCashForDaily > 0L ->
+                    "موجودی آزاد فعلی (${PersianNumberUtils.formatToman(freeCashForDaily, showUnit = false)}) ÷ ${PersianNumberUtils.toPersianDigits(remainingDaysToPayday.toString())} روز تا پایان ماه حقوقی"
+                else ->
+                    "بر اساس موجودی آزاد فعلی ÷ ${PersianNumberUtils.toPersianDigits(remainingDaysToPayday.toString())} روز باقی‌مانده"
+            }
+
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(20.dp))
-                    .background(PersianLapis)
-                    .padding(horizontal = 16.dp, vertical = 15.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .background(Color(0xFF1D3550))
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "سهم خرجِ روزانه پیشنهادی",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = AlabasterSilk,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    OrosiAmountText(
+                        amountToman = PersianNumberUtils.roundDownToCleanThousands(settings.dailySafeBudgetToman),
+                        color = AlabasterSilk,
+                        numberStyle = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp),
+                        numberFontWeight = FontWeight.Black,
+                        unitStyle = MaterialTheme.typography.labelMedium,
+                        unitColor = NishapurTurquoiseSoft
+                    )
+                }
                 Text(
-                    text = "سهم خرجِ روزانه پیشنهادی",
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    color = PersianLapisLight,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                OrosiAmountText(
-                    amountToman = PersianNumberUtils.roundDownToCleanThousands(settings.dailySafeBudgetToman),
-                    color = AlabasterSilk,
-                    numberStyle = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp),
-                    numberFontWeight = FontWeight.Black,
-                    unitStyle = MaterialTheme.typography.labelMedium,
-                    unitColor = NishapurTurquoiseSoft
+                    text = dailyFormulaCaption,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
+                    color = PersianLapisLight.copy(alpha = 0.88f),
+                    maxLines = 2,
+                    modifier = Modifier.testTag("hero_math_daily_formula")
                 )
             }
 
-            // 5. Calm Collapsible "جزئیات بیشتر" Section (Instant crisp toggle without sheet anchor stutter)
+            // 5. Calm Collapsible "جزئیات بیشتر" Section (Lifted Tonal Card)
             Surface(
                 onClick = { isMoreDetailsExpanded = !isMoreDetailsExpanded },
                 shape = RoundedCornerShape(16.dp),
-                color = OrosiSurfaceContainer,
+                color = OrosiSurfaceHigh,
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 50.dp)
@@ -2367,16 +2506,24 @@ fun HeroMathBreakdownBottomSheet(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(18.dp))
-                        .background(OrosiSurfaceContainer)
+                        .background(OrosiSurfaceHigh)
                         .padding(16.dp)
                         .testTag("hero_math_more_details_content"),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     MonthlyReportAmountRow(
-                        label = "قسط و چک‌های پیش‌رو (جدا از تراز)",
+                        label = "قسط و چک‌های همین ماه (جدا از تراز)",
                         amountToman = summary.reservedCommitmentsToman,
                         valueColor = RoyalAmethystSoft
                     )
+
+                    if (futureCommitmentsToman > 0L) {
+                        MonthlyReportAmountRow(
+                            label = "قسط و چک‌های ماه‌های آینده",
+                            amountToman = futureCommitmentsToman,
+                            valueColor = OrosiOnSurfaceVariant
+                        )
+                    }
 
                     MonthlyReportAmountRow(
                         label = "موجودی کل حساب‌ها",

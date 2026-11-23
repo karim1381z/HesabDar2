@@ -1393,6 +1393,111 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun testOrosiV28VoiceColloquialMillionFutureMonthCycleFilterAndUnique7DaySmsMatch() {
+        val azar1Ts = JalaliCalendarUtils.jalaliDayStartMillis(1405, 9, 1) + 14L * 3_600_000L
+
+        // 1. Settled installment million scaling + "یه ۲۵ تومن" guard + micro-fee preservation
+        val settledInstallment = PersianVoiceSlangParserEngine.parseVoiceCommand(
+            "سلام من برای این ماه یه ۲۵ تومن قسط داشتم که پرداخت کردم"
+        )
+        assertEquals(25_000_000L, settledInstallment.totalAmountToman)
+        assertEquals("قسط", settledInstallment.purposeCategory)
+        assertEquals(false, settledInstallment.isIncome)
+        assertEquals(null, settledInstallment.commitmentKind)
+
+        val microInstallmentFee = PersianVoiceSlangParserEngine.parseVoiceCommand(
+            "۳۵ تومان هزینه قسط پنجم وام دیشب"
+        )
+        assertEquals(35_000L, microInstallmentFee.totalAmountToman)
+
+        // 2. Colloquial single-million ("حدود یه تومان از باسلام دریافت کردم") + approximate Blu SMS match
+        val basalamIncome = PersianVoiceSlangParserEngine.parseVoiceCommand(
+            "سلام من حدود یه تومان از باسلام دریافت کردم"
+        )
+        assertEquals(1_000_000L, basalamIncome.totalAmountToman)
+        assertEquals(true, basalamIncome.isApproximateAmount)
+        assertEquals(true, basalamIncome.isIncome)
+        assertEquals(null, basalamIncome.commitmentKind)
+
+        val sms20hAgoTs = azar1Ts - 20L * 3_600_000L
+        val sms20hJalali = JalaliCalendarUtils.fromTimestamp(sms20hAgoTs)
+        val basalamMatch = OrosiVoiceSmsMatcher.matchBatch(
+            items = listOf(basalamIncome),
+            untaggedBankSms = listOf(
+                UntaggedSmsCandidate(
+                    id = 980L,
+                    bankName = "بلو",
+                    amountToman = 940_974L,
+                    isIncome = true,
+                    timestamp = sms20hAgoTs,
+                    jalaliDate = sms20hJalali.dateWithYear,
+                    timeStr = sms20hJalali.timeStr,
+                    cardInfo = "کارت بلو"
+                )
+            ),
+            nowMillis = azar1Ts
+        ).first()
+        assertEquals(true, basalamMatch.isApproximateAutoMatch)
+        assertEquals(980L, basalamMatch.matchedCandidate?.id)
+
+        // Explicit thousand still stays 1,000 while colloquial "یه تومن" / "یک تومان" is 1,000,000
+        assertEquals(1_000_000L, PersianVoiceSlangParserEngine.parseVoiceCommand("یه تومن خریدم از دیجی‌کالا").totalAmountToman)
+        assertEquals(1_000_000L, PersianVoiceSlangParserEngine.parseVoiceCommand("یک تومان دادم به علی").totalAmountToman)
+        assertEquals(1_000L, PersianVoiceSlangParserEngine.parseVoiceCommand("یک هزار تومان نانوایی").totalAmountToman)
+
+        // 3. Future-month commitment ("من برای ماه دی ۲۵ تومان قسط دارم") + standalone month rollover
+        val deyInstallment = PersianVoiceSlangParserEngine.parseVoiceCommand("من برای ماه دی ۲۵ تومان قسط دارم")
+        assertEquals(25_000_000L, deyInstallment.totalAmountToman)
+        assertEquals("قسط", deyInstallment.purposeCategory)
+        assertEquals("DEBT", deyInstallment.commitmentKind)
+        assertEquals("LOAN_INSTALLMENT", deyInstallment.commitmentCategory)
+        assertEquals("ماه دی", deyInstallment.dueDateHint)
+        assertEquals(true, deyInstallment.explicitJalaliDate.startsWith("۱ دی "))
+
+        assertEquals("۱ دی ۱۴۰۵", JalaliCalendarUtils.resolveStandaloneJalaliMonthDate("ماه دی", azar1Ts))
+        assertEquals("۱ دی ۱۴۰۵", JalaliCalendarUtils.resolveStandaloneJalaliMonthDate("دی ماه", azar1Ts))
+        assertEquals("۱ فروردین ۱۴۰۶", JalaliCalendarUtils.resolveStandaloneJalaliMonthDate("ماه فروردین", azar1Ts))
+        assertEquals(null, JalaliCalendarUtils.resolveStandaloneJalaliMonthDate("صرافی آبان تتر", azar1Ts))
+
+        // 4. Current-cycle commitment filtering (future month excluded; current month & overdue included)
+        assertEquals(false, OrosiCashflowAnalyzer.isCommitmentDueInCurrentCycle("۱ دی ۱۴۰۵", 1, azar1Ts))
+        assertEquals(true, OrosiCashflowAnalyzer.isCommitmentDueInCurrentCycle("۲۵ آذر ۱۴۰۵", 1, azar1Ts))
+        assertEquals(true, OrosiCashflowAnalyzer.isCommitmentDueInCurrentCycle("۱۵ آبان ۱۴۰۵", 1, azar1Ts))
+
+        // 5. Pass 1C unique 7-day dateless SMS auto-match vs ambiguity guard
+        val taraDateless = PersianVoiceSlangParserEngine.parseVoiceCommand("۵۰۰ تومن خرج تارا")
+        assertEquals(500_000L, taraDateless.totalAmountToman)
+        assertEquals(false, taraDateless.isVagueRecentPast)
+
+        val sms3dAgoTs = azar1Ts - 72L * 3_600_000L
+        val sms5dAgoTs = azar1Ts - 120L * 3_600_000L
+        val sms3dJalali = JalaliCalendarUtils.fromTimestamp(sms3dAgoTs)
+        val sms5dJalali = JalaliCalendarUtils.fromTimestamp(sms5dAgoTs)
+
+        val uniqueMatch = OrosiVoiceSmsMatcher.matchBatch(
+            items = listOf(taraDateless),
+            untaggedBankSms = listOf(
+                UntaggedSmsCandidate(981L, "بلو", 500_000L, false, sms3dAgoTs, sms3dJalali.dateWithYear, sms3dJalali.timeStr, "کارت بلو")
+            ),
+            nowMillis = azar1Ts
+        ).first()
+        assertEquals(true, uniqueMatch.isExactAutoMatch)
+        assertEquals(981L, uniqueMatch.matchedCandidate?.id)
+
+        val ambiguousMatch = OrosiVoiceSmsMatcher.matchBatch(
+            items = listOf(taraDateless),
+            untaggedBankSms = listOf(
+                UntaggedSmsCandidate(982L, "بلو", 500_000L, false, sms3dAgoTs, sms3dJalali.dateWithYear, sms3dJalali.timeStr, "کارت بلو"),
+                UntaggedSmsCandidate(983L, "سپه", 500_000L, false, sms5dAgoTs, sms5dJalali.dateWithYear, sms5dJalali.timeStr, "کارت سپه")
+            ),
+            nowMillis = azar1Ts
+        ).first()
+        assertEquals(null, ambiguousMatch.matchedCandidate)
+        assertEquals(false, ambiguousMatch.isExactAutoMatch)
+        assertEquals(982L, ambiguousMatch.suggestedCandidate?.id)
+    }
+
+    @Test
     fun testFullOrosiRegressionAndStressSuitePasses100Percent() {
         val report = com.example.domain.OrosiRegressionSuite.runFullRegressionAndStressSuite()
         for (r in report.results) {
@@ -1404,8 +1509,8 @@ class ExampleUnitTest {
         }
         assertEquals(true, report.allPassed)
         assertEquals(com.example.domain.OrosiRegressionSuite.EXPECTED_TOTAL_CASES, report.totalCount)
-        assertEquals(76, report.totalCount)
-        assertEquals(76, report.passedCount)
+        assertEquals(84, report.totalCount)
+        assertEquals(84, report.passedCount)
     }
 }
 
